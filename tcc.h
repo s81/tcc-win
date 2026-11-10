@@ -495,18 +495,14 @@ typedef struct SValue {
 
 } SValue;
 
-/* symbol attributes */
-#ifdef TCCW_SYMATTR16X2 /* TEMPORARY arm64 diagnosis: two 16-bit units */
+/* symbol attributes.
+   Kept in 16-bit bit-field units: with a single 32-bit unit, tcc built by
+   MSVC with -O2 for ARM64 Windows read wrong values for these fields
+   (struct layouts came out corrupted). gcc, clang, MSVC for x86/x64 and
+   MSVC ARM64 with -Od were correct, and UBSan/ASan found no undefined
+   behaviour, so this avoids an MSVC ARM64 code generation problem. */
 struct SymAttr {
     unsigned short
-    aligned : 5, packed : 1, weak : 1, visibility : 2, dllexport : 1,
-    nodecorate : 1, dllimport : 1, addrtaken : 1, nodebug : 1, owner : 1,
-    cexpr : 1;
-    unsigned short borrow : 2, xxxx : 14;
-};
-#else
-struct SymAttr {
-    unsigned
     aligned     : 5, /* alignment as log2+1 (0 == unspecified) */
     packed      : 1,
     weak        : 1,
@@ -517,11 +513,11 @@ struct SymAttr {
     addrtaken   : 1,
     nodebug     : 1,
     owner       : 1, /* [[owner]]: owning pointer (move checked) */
-    cexpr       : 1, /* C23 constexpr floating constant (value in enum_val) */
+    cexpr       : 1; /* C23 constexpr floating constant (value in enum_val) */
+    unsigned short
     borrow      : 2, /* 1 [[borrow]], 2 [[borrow_mut]] (borrow checked) */
     xxxx        : 14; /* not used */
 };
-#endif
 
 /* function attributes or temporary attributes for parsing */
 struct FuncAttr {

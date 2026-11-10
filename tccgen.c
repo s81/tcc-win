@@ -5370,11 +5370,6 @@ static void struct_decl(CType *type, int u)
     if (v) {
         /* struct already defined ? return it */
         s = struct_find(v);
-#ifdef TCCW_DEBUG_STRUCT /* TEMPORARY arm64 diagnosis */
-        fprintf(stderr, "struct ref '%s': s=%p c=%d scope=%d local_scope=%d s.t=%x u=%x tok=%s\n",
-            get_tok_str(v, NULL), (void*)s, s ? s->c : 0, s ? s->sym_scope : 0,
-            local_scope, s ? s->type.t : 0, u, get_tok_str(tok, &tokc));
-#endif
         if (s && (s->sym_scope == local_scope || (tok != '{' && tok != ';'))) {
             if (u == s->type.t)
                 goto do_decl;
@@ -5594,12 +5589,6 @@ do_decl:
 	    check_fields(type, 1);
 	    check_fields(type, 0);
             struct_layout(type, &ad);
-#ifdef TCCW_DEBUG_STRUCT /* TEMPORARY arm64 diagnosis */
-            fprintf(stderr, "struct def '%s': ref=%p c=%d r=%d find=%p\n",
-                get_tok_str(type->ref->v & ~SYM_STRUCT, NULL), (void*)type->ref,
-                type->ref->c, type->ref->r,
-                (void*)struct_find(type->ref->v & ~SYM_STRUCT));
-#endif
         }
         if (debug_modes)
             tcc_debug_fix_forw(tcc_state, type);
