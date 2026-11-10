@@ -107,6 +107,8 @@ if "%D%"=="" echo %SELF%: error: unknown target '%T%'&&exit /B 1
 git.exe --version 2>nul
 if not %ERRORLEVEL%==0 goto :git_done
 for /f %%b in ('git.exe rev-parse --abbrev-ref HEAD') do set GITHASH=%%b
+@rem detached HEAD (CI, release builds): use the tag if HEAD is tagged
+if "%GITHASH%"=="HEAD" for /f %%b in ('git.exe describe --tags --exact-match 2^>nul') do set GITHASH=%%b
 for /f %%b in ('git.exe log -1 "--pretty=format:%%cs_%GITHASH%@%%h"') do set GITHASH=%%b
 git.exe diff --quiet
 if %ERRORLEVEL%==1 set GITHASH=%GITHASH%*
