@@ -70,6 +70,29 @@ headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 | `roundeven`, `nextup`, `nextdown` | `<math.h>` | with `f` and `l` variants |
 | `fmaximum`, `fminimum`, `fmaximum_num`, `fminimum_num`, `fmaximum_mag`, `fminimum_mag`, `fmaximum_mag_num`, `fminimum_mag_num` | `<math.h>` | with `f` and `l` variants; `long double` is `double` on these targets |
 
+### `printf` family: `%b` / `%B`
+
+msvcrt's `printf` does not implement the C23 `%b`/`%B` conversions and prints
+three exponent digits (`1.5e+003`). In C23 mode `<stdio.h>` therefore maps
+`printf`, `fprintf`, `sprintf`, `snprintf`, `vprintf`, `vfprintf`, `vsprintf`
+and `vsnprintf` to wrappers in `libtcc1.a` (`__tcc_printf` etc., source
+`lib/c23printf.c`). The wrappers walk the format string and
+
+- format `%b`/`%B` themselves, with the flags `#` (`0b`/`0B` prefix), `0`,
+  `-`, width, precision and the length modifiers `hh h l ll j z t` and
+  C23 `wN`/`wfN`;
+- hand every other conversion to msvcrt's `_snprintf`, one specification at a
+  time (with `*` resolved and integers passed as 64-bit values), and shorten
+  the exponent of `e`/`E`/`g`/`G` output to the C form (at least two digits);
+- write infinities and NaNs as `inf`/`nan` (`INF`/`NAN`) and handle `%n`;
+- return the full length (C semantics) even when `snprintf` truncates.
+
+The msvcrt-specific `I64`/`I32`/`I` length modifiers (used by `<inttypes.h>`)
+are still accepted. Other output (`%p`, `%a`) is msvcrt's. Compile with
+`-D__TCC_MSVCRT_PRINTF` to call msvcrt's functions directly. The wide
+(`wprintf`) family and `scanf` are not wrapped. Tested by
+`tests/c23/c23_printf_b.c`.
+
 The `__STDC_VERSION_*_H__` macros are still not defined, since the headers
 remain incomplete.
 
@@ -82,4 +105,3 @@ These are not declared and not available:
 | `free_sized`, `free_aligned_sized` | C23; not provided together with `aligned_alloc` (below) |
 | `aligned_alloc` | C11; memory from msvcrt's `_aligned_malloc` cannot be released with `free`, so a compatible version needs its own allocator |
 | other new `<math.h>` functions (`compoundn`, `rootn`, `pown`, `sinpi`, ...) | C23 |
-| `%b` in the `printf` family | C23; compiles, but msvcrt's `printf` does not implement it (not verified at run time) |

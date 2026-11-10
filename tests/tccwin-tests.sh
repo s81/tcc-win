@@ -32,6 +32,7 @@ check_ok "$top/tests/c23" c23_constexpr.c
 check_ok "$top/tests/c23" c23_audit_fixes.c -Wall
 check_ok "$top/tests/c23" c23_runtime.c
 check_ok "$top/tests/c23" c23_snan.c
+check_ok "$top/tests/c23" c23_printf_b.c -Wall
 for f in "$top"/tests/ownership/ok_*.c; do
     check_ok "$top/tests/ownership" "$(basename "$f")"
 done
