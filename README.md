@@ -6,7 +6,8 @@ A Windows-only fork of the [Tiny C Compiler](https://repo.or.cz/tinycc.git)
 1. **C23 by default** (`__STDC_VERSION__ == 202311L`).
 2. **Rust-like ownership and borrow checking** with non-lexical lifetimes
    for pointers marked `[[owner]]`, `[[borrow]]` and `[[borrow_mut]]`
-   (opt-in, compile-time only, see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)).
+   (opt-in, compile-time only, see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)),
+   including `[[owner]]` fields of local structs.
 3. **No `goto`** (see [below](#no-goto)).
 
 ```c
