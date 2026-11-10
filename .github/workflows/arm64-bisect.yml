@@ -1,43 +1,37 @@
-# TEMPORARY: find which revision breaks struct types in the arm64-win32
-# compiler built by MSVC on ARM64 Windows. To be removed after diagnosis.
-name: arm64 bisect (temporary)
+# TEMPORARY: narrow down why the arm64-win32 compiler built on ARM64
+# Windows treats defined structs as incomplete (introduced by edb87a2).
+# To be removed after diagnosis.
+name: arm64 diagnose (temporary)
 
 on:
   pull_request:
 
 jobs:
-  bisect:
+  diagnose:
     strategy:
       fail-fast: false
       matrix:
-        rev: [upstream, 1b71121, 6609a88, edb87a2, 4e612ad, HEAD]
-    name: arm64 struct test @ ${{ matrix.rev }}
+        variant: [msvc-O2, msvc-Od, clang]
+    name: arm64 struct test, tcc built by ${{ matrix.variant }}
     runs-on: windows-11-arm
     timeout-minutes: 10
     env:
-      REV: ${{ matrix.rev }}
+      VARIANT: ${{ matrix.variant }}
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    - name: check out revision
+    - name: struct test program
       shell: bash
-      run: |
-        if [ "$REV" = upstream ]; then
-          git clone -q https://github.com/TinyCC/tinycc src
-          git -C src checkout -q aade7bafb59641660bc9a0e21ad0a9a4a1ed346e
-        else
-          git worktree add -q src "$REV"
-        fi
-        git -C src log -1 --oneline
-        printf 'struct S { int a, b; };\nint main(void)\n{\n    struct T { struct S s; int c; } t = { { 1, 2 }, 3 };\n    return sizeof(struct S) == 8 && sizeof t == 12 && t.s.b == 2 ? 0 : 1;\n}\n' > src/win32/t.c
-    - name: build with MSVC and compile a struct program
+      run: printf 'struct S { int a, b; };\nint main(void)\n{\n    struct T { struct S s; int c; } t = { { 1, 2 }, 3 };\n    return sizeof(struct S) == 8 && sizeof t == 12 && t.s.b == 2 ? 0 : 1;\n}\n' > win32/t.c
+    - name: build tcc and compile the struct program
       shell: cmd
       run: |
-        cd src\win32
+        cd win32
         for /f "delims=" %%i in ('vswhere.exe -latest -property installationPath') do call "%%i\VC\Auxiliary\Build\vcvarsall.bat" arm64
-        call build-tcc.bat -c cl -t arm64 >build.log 2>&1
-        findstr /c:"error" build.log
+        if "%VARIANT%"=="msvc-Od" set _CL_=/Od
+        set COMPILER=cl
+        if "%VARIANT%"=="clang" set COMPILER=clang
+        call build-tcc.bat -c %COMPILER% -t arm64 >build.log 2>&1
+        findstr /c:"error" /c:"warning" build.log
         tcc.exe -B. t.c -o t.exe || exit /b 1
         t.exe || exit /b 1
         echo STRUCT_OK
