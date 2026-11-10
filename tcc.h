@@ -1201,8 +1201,9 @@ struct filespec {
 #define TOK_LINENUM 0xcf /* line number info */
 #define TOK_CWB     0xd0 /* C23 _BitInt constant (suffix wb) */
 #define TOK_CUWB    0xd1 /* C23 unsigned _BitInt constant (suffix uwb) */
+#define TOK_CU8CHAR 0xd2 /* C23 u8 character constant (unsigned char) */
 
-#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_CUWB)
+#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_CU8CHAR)
 
 #define TOK_EOF       (-1)  /* end of file */
 #define TOK_LINEFEED  10    /* line feed */

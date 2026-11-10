@@ -27,30 +27,30 @@ C17. It is not exhaustive: optional features (decimal floating point
 | `static` / `constexpr` compound literals | |
 | `f()` means `f(void)`; `f(...)`; `va_start(ap)` | old-style definitions removed |
 | binary literals, digit separators `'` | |
-| `u8` character constants | but see the type below |
+| `u8` character constants | type `unsigned char`; one UTF-8 code unit |
 | `_BitInt(N)`, `wb`/`uwb` suffixes | `BITINT_MAXWIDTH` is 64, the minimum C23 requires |
 | `#elifdef`, `#elifndef`, `#warning`, `__VA_OPT__`, `__has_include` | |
-| `#embed` with `limit`, `prefix`, `suffix`, `if_empty`; `__has_embed` | but see macro names below |
+| `#embed` with `limit`, `prefix`, `suffix`, `if_empty`; `__has_embed` | the resource name may come from a macro |
+| tag compatibility: an identical redefinition of a struct, union or enum in the same scope (N3037) | a different one is an error |
+| labels at the end of a compound statement | `-Wall` warns only before C23 |
 | `__STDC_VERSION__` = `202311L` | |
 | `<stdbit.h>`, `<stdckdint.h>`, `unreachable()` | |
 | `<limits.h>` `*_WIDTH` macros, `BITINT_MAXWIDTH` | |
+| `<stdint.h>` `*_WIDTH` macros | |
+| `assert(...)` is variadic | commas, e.g. in compound literals, are allowed |
+| `INFINITY`, `NAN`, `*_IS_IEC_60559`, `*_NORM_MAX` in `<float.h>` | |
+| `__STDC_VERSION_*_H__` = `202311L` | defined only in the headers that are complete: `<assert.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>` |
 
 ## Language: gaps
 
-| Gap | Observed |
-|---|---|
-| Tag compatibility: a second, identical definition of a struct, union or enum in the same scope (N3037) | `error: struct/union/enum already defined` |
-| Type of `u8'a'` should be `unsigned char` | it is `int` (`_Generic(u8'a', int: ...)` matches) |
-| `#embed` with a macro that expands to the resource name | `error: '#embed' expects "FILENAME" or <FILENAME>` (a literal name works) |
-| Label at the end of a compound statement is valid C23 | `-Wall` warns "deprecated use of label at end of compound statement" |
+None found by this audit.
 
 ## Headers: gaps
 
 | Gap | Observed |
 |---|---|
-| `__STDC_VERSION_STDLIB_H__` and the other `__STDC_VERSION_*_H__` macros | not defined |
-| `INFINITY`, `NAN` (and the other new macros) in `<float.h>` | not defined there (they are in `<math.h>`) |
-| `*_WIDTH` macros in `<stdint.h>` (`INT32_WIDTH`, `INTPTR_WIDTH`, ...) | not defined |
+| `FLT_SNAN`, `DBL_SNAN`, `LDBL_SNAN` in `<float.h>` | not defined: tcc has no constant for a signaling NaN. For this reason `__STDC_VERSION_FLOAT_H__` is not defined |
+| `__STDC_VERSION_*_H__` of `<stdlib.h>`, `<string.h>`, `<stdio.h>`, `<time.h>`, `<math.h>`, `<uchar.h>`, `<wchar.h>`, `<inttypes.h>`, `<setjmp.h>`, `<fenv.h>`, `<complex.h>`, `<tgmath.h>`, `<stdatomic.h>` | deliberately not defined: the macro states that the header is C23-complete, and these lack the library functions below (or were not audited) |
 
 ## Library: gaps
 

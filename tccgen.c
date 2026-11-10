@@ -5559,11 +5559,36 @@ static int in_range(long long n, int t)
 }
 
 /* enum/struct/union declaration. u is VT_ENUM/VT_STRUCT/VT_UNION */
+/* C23: may 'b', just parsed, redefine the struct/union/enum 'a' that is
+   already defined in the same scope (same tag, same content)? */
+static int same_tag_content(Sym *a, Sym *b)
+{
+    if ((a->type.t & VT_BTYPE) != (b->type.t & VT_BTYPE)
+        || IS_ENUM(a->type.t) != IS_ENUM(b->type.t)
+        || a->c != b->c || a->r != b->r)
+        return 0;
+    if (IS_ENUM(a->type.t))
+        return 1; /* enumerators are compared while parsing */
+    for (a = a->next, b = b->next; a && b; a = a->next, b = b->next) {
+        int an = (a->v & ~SYM_FIELD) >= SYM_FIRST_ANOM;
+        int bn = (b->v & ~SYM_FIELD) >= SYM_FIRST_ANOM;
+        if (an != bn || (!an && a->v != b->v))
+            return 0;
+        if (IS_ENUM_VAL(a->type.t)) {
+            if (a->enum_val != b->enum_val)
+                return 0;
+        } else if (a->c != b->c || a->type.t != b->type.t
+                   || !is_compatible_types(&a->type, &b->type))
+            return 0; /* offset, bit-field position/width, type */
+    }
+    return !a && !b;
+}
+
 static void struct_decl(CType *type, int u)
 {
     int v, c, size, align, flexible;
     int bit_size, bsize, bt, ut;
-    Sym *s, *ss, **ps;
+    Sym *s, *ss, **ps, *redef = NULL, *redef_e = NULL;
     AttributeDef ad, ad1;
     CType type1, btype;
 
@@ -5615,8 +5640,20 @@ do_decl:
     if (tok == '{') {
         next();
         if (s->c != -1
-            && !(u == VT_ENUM && s->c == 0)) /* not yet defined typed enum */
-            tcc_error("struct/union/enum already defined");
+            && !(u == VT_ENUM && s->c == 0)) { /* not yet defined typed enum */
+            /* C23: a redefinition with the same content is allowed; parse
+               it into a new type and compare when it is complete */
+            if (tcc_state->cversion < 202311 || s->sym_scope != local_scope)
+                tcc_error("struct/union/enum already defined");
+            redef = s;
+            redef_e = s->next; /* enumerators to match */
+            type1.t = u | ut;
+            type1.ref = NULL;
+            s = sym_push(anon_sym++ | SYM_STRUCT, &type1, 0, bt ? 0 : -1);
+            s->r = 0;
+            type->t = s->type.t;
+            type->ref = s;
+        }
         s->c = -2;
         /* cannot be empty */
         /* non empty enums are not allowed */
@@ -5644,9 +5681,18 @@ do_decl:
                 if (bt && !in_range(ll, t.t))
 		    tcc_error("enumerator '%s' out of range of its type",
 			get_tok_str(v, NULL));
-                ss = sym_push(v, &t, VT_CONST, 0);
-                ss->enum_val = ll;
-                *ps = ss, ps = &ss->next;
+                if (redef) {
+                    /* C23 redefinition: the same enumerators, in order,
+                       with the same values; they are already declared */
+                    if (!redef_e || redef_e->v != v || redef_e->enum_val != ll)
+                        tcc_error("redefinition of '%s' with different content",
+                            get_tok_str(redef->v & ~SYM_STRUCT, NULL));
+                    redef_e = redef_e->next;
+                } else {
+                    ss = sym_push(v, &t, VT_CONST, 0);
+                    ss->enum_val = ll;
+                    *ps = ss, ps = &ss->next;
+                }
                 if (ll < nl)
                     nl = ll;
                 if (ll > pl)
@@ -5660,6 +5706,9 @@ do_decl:
                     break;
             }
             skip('}');
+            if (redef && redef_e)
+                tcc_error("redefinition of '%s' with different content",
+                    get_tok_str(redef->v & ~SYM_STRUCT, NULL));
 
             if (bt) {
                 t.t = bt;
@@ -5809,6 +5858,13 @@ do_decl:
 	    check_fields(type, 1);
 	    check_fields(type, 0);
             struct_layout(type, &ad);
+        }
+        if (redef) {
+            if (!same_tag_content(redef, s))
+                tcc_error("redefinition of '%s' with different content",
+                    get_tok_str(redef->v & ~SYM_STRUCT, NULL));
+            type->t = redef->type.t; /* it is the same type */
+            type->ref = redef;
         }
         if (debug_modes)
             tcc_debug_fix_forw(tcc_state, type);
@@ -6863,6 +6919,9 @@ ST_FUNC void unary(void)
         t = VT_SHORT|VT_UNSIGNED;
         goto push_tokc;
 #endif
+    case TOK_CU8CHAR: /* C23: unsigned char */
+        t = VT_BYTE | VT_UNSIGNED | VT_DEFSIGN;
+        goto push_tokc;
     case TOK_CINT:
     case TOK_CCHAR: 
 	t = VT_INT;
@@ -8924,8 +8983,8 @@ again:
                 if (0 == (flags & STMT_COMPOUND))
                     goto again;
                 /* C23: insert implicit null-statement whithin compound statement */
-            } else {
-                /* we accept this, but it is a mistake */
+            } else if (tcc_state->cversion < 202311) {
+                /* valid since C23; an extension before */
                 tcc_warning_c(warn_all)("deprecated use of label at end of compound statement");
             }
         } else {
