@@ -4450,34 +4450,154 @@ static struct own_var *own_peek(int null_test)
     return o;
 }
 
-/* detect 'if (p)' and 'if (!p)' */
-static struct own_var *own_peek_null(int *neg)
+/* Null tests and null constants.  TinyCC parses in one pass, so the
+   tokens of a condition or initializer are read ahead, matched against a
+   few fixed shapes and then put back. */
+#define OWN_SCAN_MAX 24
+#define OWN_TK_ZERO  (-1) /* integer constant 0 */
+#define OWN_TK_VALUE (-2) /* any other token that carries a value */
+
+/* read ahead up to the first 'end1' or 'end2' at nesting depth 0 and put
+   the tokens back.  Returns their number, or -1 if there are more than
+   OWN_SCAN_MAX of them. */
+static int own_scan(int *tk, int end1, int end2)
 {
-    struct own_var *o;
-    *neg = 0;
-    if (tok != '!')
-        return own_peek(1);
-    if (!own_n || nocode_wanted)
-        return NULL;
+    TokenString *ts;
+    int n = 0, depth = 0, r;
+
+    ts = tok_str_alloc();
+    for (;;) {
+        if (tok == TOK_EOF)
+            break;
+        if (depth == 0 && (tok == end1 || tok == end2))
+            break;
+        if (n == OWN_SCAN_MAX) {
+            n = -1;
+            break;
+        }
+        if (tok == '(' || tok == '[' || tok == '{')
+            ++depth;
+        else if (tok == ')' || tok == ']' || tok == '}') {
+            if (--depth < 0) {
+                n = -1;
+                break;
+            }
+        }
+        if (tok >= TOK_CINT && tok <= TOK_CULONG)
+            tk[n++] = tokc.i == 0 ? OWN_TK_ZERO : OWN_TK_VALUE;
+        else
+            tk[n++] = TOK_HAS_VALUE(tok) ? OWN_TK_VALUE : tok;
+        tok_str_add_tok(ts);
+        next();
+    }
+    r = n;
+    /* put the tokens back, including the current one */
+    if (tok != TOK_EOF)
+        tok_str_add_tok(ts);
+    tok_str_add(ts, 0);
+    begin_macro(ts, 1);
     next();
-    o = own_peek(1);
-    unget_tok('!');
-    *neg = 1;
-    return o;
+    return r;
 }
 
-/* is the initializer that follows a plain 'nullptr' or '0' ? */
+/* null constant in tk[i..]: 'nullptr', '0', '(void *)' null constant,
+   '(' null constant ')'.  Returns the index after it, or -1. */
+static int own_m_null(const int *tk, int i, int n)
+{
+    int j;
+    if (i >= n)
+        return -1;
+    if (tk[i] == TOK_NULLPTR || tk[i] == OWN_TK_ZERO)
+        return i + 1;
+    if (tk[i] != '(')
+        return -1;
+    if (i + 3 < n && tk[i + 1] == TOK_VOID && tk[i + 2] == '*'
+        && tk[i + 3] == ')')
+        return own_m_null(tk, i + 4, n);
+    j = own_m_null(tk, i + 1, n);
+    return j > 0 && j < n && tk[j] == ')' ? j + 1 : -1;
+}
+
+/* tracked variable in tk[i..]: name or '(' name ')' */
+static int own_m_var(const int *tk, int i, int n, struct own_var **po)
+{
+    Sym *s;
+    int j;
+    if (i >= n)
+        return -1;
+    if (tk[i] == '(') {
+        j = own_m_var(tk, i + 1, n, po);
+        return j > 0 && j < n && tk[j] == ')' ? j + 1 : -1;
+    }
+    if (tk[i] < TOK_UIDENT || !(s = sym_find(tk[i])) || !(*po = own_find(s)))
+        return -1;
+    return i + 1;
+}
+
+/* is tk[i..n) exactly one null test of a tracked variable?  '*neg' is set
+   if the variable is null when the test is true. */
+static struct own_var *own_m_test(const int *tk, int i, int n, int *neg)
+{
+    struct own_var *o = NULL;
+    int j, depth;
+
+    if (i >= n)
+        return NULL;
+    if (tk[i] == '!') { /* !test */
+        o = own_m_test(tk, i + 1, n, neg);
+        *neg ^= 1;
+        return o;
+    }
+    if (tk[i] == '(' && tk[n - 1] == ')') { /* ( test ) */
+        for (j = i, depth = 0; j < n - 1; ++j) {
+            depth += tk[j] == '(' ? 1 : tk[j] == ')' ? -1 : 0;
+            if (depth == 0)
+                break;
+        }
+        if (j == n - 1)
+            return own_m_test(tk, i + 1, n - 1, neg);
+    }
+    *neg = 0;
+    j = own_m_var(tk, i, n, &o);
+    if (j == n) /* p */
+        return o;
+    if (j > 0) { /* p == null, p != null */
+        if ((tk[j] == TOK_EQ || tk[j] == TOK_NE) && own_m_null(tk, j + 1, n) == n) {
+            *neg = tk[j] == TOK_EQ;
+            return o;
+        }
+        return NULL;
+    }
+    j = own_m_null(tk, i, n); /* null == p, null != p */
+    if (j > 0 && j < n && (tk[j] == TOK_EQ || tk[j] == TOK_NE)
+        && own_m_var(tk, j + 1, n, &o) == n) {
+        *neg = tk[j] == TOK_EQ;
+        return o;
+    }
+    return NULL;
+}
+
+/* detect the null tests 'p', '!p', 'p == null', 'p != null' (and the same
+   with operands swapped or in parentheses) up to 'end' */
+static struct own_var *own_peek_null(int end, int *neg)
+{
+    int tk[OWN_SCAN_MAX], n;
+    *neg = 0;
+    if (!own_n || nocode_wanted)
+        return NULL;
+    n = own_scan(tk, end, end);
+    return n > 0 ? own_m_test(tk, 0, n, neg) : NULL;
+}
+
+/* is the initializer that follows a null constant ('nullptr', '0',
+   'NULL', '(void *)0' ...) up to ';' or ',' ? */
 static int own_peek_nullinit(void)
 {
-    CValue cv = tokc;
-    int t = tok, r;
-    if (nocode_wanted || !(t == TOK_NULLPTR || (t == TOK_CINT && cv.i == 0)))
+    int tk[OWN_SCAN_MAX], n;
+    if (nocode_wanted)
         return 0;
-    next();
-    r = tok == ';' || tok == ',';
-    unget_tok(t);
-    tokc = cv;
-    return r;
+    n = own_scan(tk, ';', ',');
+    return n > 0 && own_m_null(tk, 0, n) == n;
 }
 
 static void own_narrow(struct own_var *o)
@@ -4699,7 +4819,9 @@ static void own_case(void)
 }
 
 /* end of a loop body: 'pre' is the state before the loop */
-static void own_loop_end(struct own_snap *pre, struct own_snap *acc, int live)
+/* 'exit_null': owner that is null when the loop condition is false */
+static void own_loop_end(struct own_snap *pre, struct own_snap *acc, int live,
+    struct own_var *exit_null)
 {
     int i;
     if (live)
@@ -4709,8 +4831,10 @@ static void own_loop_end(struct own_snap *pre, struct own_snap *acc, int live)
                 tcc_error("owner '%s' is moved inside a loop (it would be"
                     " used again in the next iteration)",
                     own_name(&own_vars[i]));
+    own_narrow(exit_null); /* the condition is false after an iteration */
     own_acc(acc, live);
     own_restore(pre);
+    own_narrow(exit_null); /* ... or before the first one */
     own_acc(acc, pre->live);
     own_restore(acc);
 }
@@ -8233,12 +8357,15 @@ static void gexpr_decl(void)
 }
 
 /* run a loop body with ownership tracking */
-#define OWN_LOOP(body) do { \
+/* 'nv', 'neg': null test of the loop condition (see own_peek_null) */
+#define OWN_LOOP(body, nv, neg) do { \
         struct own_snap pre_, acc_, *brk_ = own_brk; int live_; \
         own_save(&pre_), own_acc_init(&acc_), own_brk = &acc_; \
+        if (neg) \
+            own_narrow(nv); /* while (!p): p is null in the body */ \
         body; \
         live_ = !nocode_wanted, own_brk = brk_; \
-        own_loop_end(&pre_, &acc_, live_); \
+        own_loop_end(&pre_, &acc_, live_, (neg) ? NULL : (nv)); \
     } while (0)
 
 static void block(int flags)
@@ -8267,7 +8394,7 @@ again:
         int neg, live0 = !nocode_wanted;
         new_scope_s(&o);
         skip('(');
-        nv = own_peek_null(&neg);
+        nv = own_peek_null(')', &neg);
         gexpr_decl();
         a = gvtst(1, 0);
         skip(')');
@@ -8300,15 +8427,18 @@ again:
         prev_scope_s(&o);
 
     } else if (t == TOK_WHILE) {
+        struct own_var *nv;
+        int neg;
         new_scope_s(&o);
         own_loop_enter();
         d = gind();
         skip('(');
+        nv = own_peek_null(')', &neg);
         gexpr();
         a = gvtst(1, 0);
         skip(')');
         b = 0;
-        OWN_LOOP(lblock(&a, &b));
+        OWN_LOOP(lblock(&a, &b), nv, neg);
         own_loop_exit();
         gjmp_addr(d);
         gsym_addr(b, d);
@@ -8401,6 +8531,8 @@ again:
         skip(';');
 
     } else if (t == TOK_FOR) {
+        struct own_var *nv = NULL;
+        int neg = 0;
         new_scope(&o);
 
         skip('(');
@@ -8417,6 +8549,7 @@ again:
         a = b = 0;
         c = d = gind();
         if (tok != ';') {
+            nv = own_peek_null(';', &neg);
             gexpr();
             a = gvtst(1, 0);
         }
@@ -8430,7 +8563,7 @@ again:
             gsym(e);
         }
         skip(')');
-        OWN_LOOP(lblock(&a, &b));
+        OWN_LOOP(lblock(&a, &b), nv, neg);
         own_loop_exit();
         gjmp_addr(d);
         gsym_addr(b, d);
@@ -8442,7 +8575,7 @@ again:
         own_loop_enter();
         a = b = 0;
         d = gind();
-        OWN_LOOP(lblock(&a, &b));
+        OWN_LOOP(lblock(&a, &b), NULL, 0); /* do-while: not narrowed */
         gsym(b);
         skip(TOK_WHILE);
         skip('(');
