@@ -3,13 +3,11 @@
 #include <stdio.h>
 int main(void)
 {
-    [[owner]] char *p = malloc(4);
     [[borrow]] const char *v;
     {
-        [[borrow]] const char *w = p;
-        v = w;
-    } /* error: w ends while v borrows from it */
+        [[owner]] char *q = nullptr;
+        v = q;
+    } /* error: q ends while v still borrows from it */
     puts(v);
-    free(p);
     return 0;
 }

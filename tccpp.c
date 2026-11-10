@@ -60,6 +60,7 @@ static struct TinyAlloc *toksym_alloc;
 static struct TinyAlloc *tokstr_alloc;
 
 static TokenString *macro_stack;
+ST_DATA int tok_count; /* tokens read so far (positions for the borrow checker) */
 
 static const char tcc_keywords[] = 
 #define DEF(id, str) str "\0"
@@ -3764,6 +3765,7 @@ static int macro_subst(
 ST_FUNC void next(void)
 {
     int t;
+    ++tok_count;
     while (macro_ptr) {
 redo:
         t = *macro_ptr;

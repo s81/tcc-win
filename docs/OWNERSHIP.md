@@ -7,6 +7,7 @@ does not change the generated code.
 
 ```c
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 void upcase([[borrow_mut]] char *s);           // may modify, may not keep or free
@@ -17,12 +18,10 @@ int main(void)
     if (!p)
         return 1;
     strcpy(p, "hello");
-    {
-        [[borrow]] const char *view = p;        // shared borrow until '}'
-        upcase(p);  // error: cannot pass 'p' as mutable borrow while it is borrowed by 'view'
-        free(p);    // error: cannot move owner 'p' while it is borrowed by 'view'
-    }
-    free(p);        // ok: nothing borrows p any more
+    [[borrow]] const char *view = p;            // shared borrow of p
+    upcase(p);      // error: cannot pass 'p' as mutable borrow while it is borrowed by 'view'
+    puts(view);     // ... because view is used again here
+    free(p);        // ok: view is not used any more
     return 0;
 }
 ```
@@ -79,23 +78,37 @@ used as
   `[[borrow_mut]]` variable: `[[borrow]] const char *v = p;`
 - argument for a `[[borrow]]` or `[[borrow_mut]]` parameter: `len(p)`.
 
-**Lifetimes are lexical.** A borrow held in a variable lasts until the end of
-the block (`{ ... }`) that declares the variable; assigning the variable
-again ends the old borrow and starts a new one. A borrow passed as an
-argument lasts for the call. Put borrows in an inner block to end them early:
+**Lifetimes are non-lexical**, as in Rust 2018 and later: a borrow is live
+from where it is created until its **last use**, not until the end of its
+block. An operation that conflicts with a borrow (for example `free(p)` while
+`v` borrows `p`) is an error only if the borrow is used again afterwards:
 
 ```c
 [[owner]] char *p = malloc(16);
-{
-    [[borrow]] const char *v = p;
-    puts(v);
-}               // v ends here
+[[borrow]] const char *v = p;
+puts(v);        // last use of v: the borrow ends here
 free(p);        // ok
 ```
 
-Unlike Rust 2018 and later (non-lexical lifetimes), a borrow does not end at
-its last use, because TinyCC compiles in a single pass and cannot see later
-uses.
+The details:
+
+- **Loops.** A borrow that is used inside a loop (including its condition)
+  and was created before the loop is live until the end of the loop, because
+  the next iteration uses it again.
+- **Reassignment** (`v = q;`) ends the old borrow, unless the assignment is
+  inside an `if`/`else` branch, `switch`, loop body, or the right operand of
+  `&&`, `||` or `?:` relative to the declaration of `v`. There it may not
+  run, so it counts as a use of the old borrow.
+- **Same statement.** A conflict in the same statement as the last use is
+  an error, e.g. `printf("%s %s", m, p)` while `m` mutably borrows `p`.
+- **Scope.** A borrow ends at the end of its block at the latest.
+- **Arguments.** A borrow passed as an argument lasts for the call.
+
+TinyCC compiles in a single pass, so it cannot see later uses when it meets
+a conflicting operation. It records the conflict and decides when the live
+range of the borrow is known (at the end of its block, or when it is
+reassigned); the error is then reported at the line of the conflicting
+operation.
 
 **Rules.** While a variable is borrowed:
 
@@ -111,7 +124,8 @@ reborrowed (the original cannot be used while the reborrow lives), a shared
 borrow can be copied, and a shared borrow can never become a mutable one.
 
 A borrow can never be moved (`free(v)` on a borrow is an error) and must not
-outlive what it borrows from. A function may return a borrow parameter, but
+be used after the owner it borrows from went out of scope. A copy of a
+borrow (`w = v;`) borrows from the same owner, so it may outlive `v`. A function may return a borrow parameter, but
 not a borrow of one of its own owners (including `[[owner]]` parameters,
 which the function must release).
 
@@ -141,7 +155,7 @@ parameter at the same time (aliasing).
 | `'a' and 'b' are passed to the same call and one of them is a mutable borrow (aliasing)` | two arguments refer to the same object |
 | `cannot move out of borrow 'v'` | a borrow does not own the resource |
 | `cannot return borrow 'v' of local owner 'p'` | the result would dangle |
-| `'w' does not live long enough: it is still borrowed by 'v'` | the borrow outlives its source |
+| `'q' does not live long enough: it is still borrowed by 'v'` | the borrow is used after the owner `q` went out of scope |
 | `use of borrow 'v' before initialization` / `... not initialized on all paths` | uninitialized borrow |
 | `[[borrow]] requires a pointer to const` | use `[[borrow_mut]]` for write access |
 
@@ -161,8 +175,15 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   still dangle.
 - With a shared borrow alive, writes through the owner itself (`p[0] = 1`)
   are not detected; only C's `const` protects writes through the borrow.
-- Lifetimes are lexical (see above).
-- `goto` and `continue` paths are not tracked.
+- Liveness follows the source text, not the full control-flow graph, so it
+  is sometimes stricter than Rust: a conflict in one branch of an `if` and a
+  use in a later branch of the same `if` is an error, and a borrow that is
+  reassigned in both branches of an `if` still counts as possibly holding
+  the old value.
+- `goto` and `continue` paths are not tracked; a backward `goto` that forms
+  a loop does not keep a borrow alive.
+- At most 128 conflicts are pending per function; beyond that a conflict is
+  reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.
 - Owners and borrows in structs, globals, statics and arrays are not tracked.
 - Conditions other than `if (p)` / `if (!p)` do not narrow to *null*
