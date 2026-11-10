@@ -334,16 +334,12 @@ extern "C" {
   /* 7.12.8.1 The erf functions  */
   extern double __cdecl erf (double);
   extern float __cdecl erff (float);
-  /* TODO
   extern long double __cdecl erfl (long double);
-  */ 
 
   /* 7.12.8.2 The erfc functions  */
   extern double __cdecl erfc (double);
   extern float __cdecl erfcf (float);
-  /* TODO
   extern long double __cdecl erfcl (long double);
-  */ 
 
   /* 7.12.8.3 The lgamma functions */
   extern double __cdecl lgamma (double);
@@ -481,6 +477,34 @@ extern "C" {
 #endif
 #pragma pack(pop)
 
+#ifndef __NO_ISOCEXT
+#if defined(__i386__)
+typedef double float_t;         /* x87 with 53-bit precision */
+#else
+typedef float float_t;
+#endif
+typedef double double_t;
+
+#define MATH_ERRNO 1
+#define MATH_ERREXCEPT 2
+#define math_errhandling MATH_ERRNO
+
+/* 7.12.14 comparison macros, without "invalid" for quiet NaNs; long
+   double is double on these targets */
+__CRT_INLINE int __cdecl __isunordered(double _X,double _Y) { return _X != _X || _Y != _Y; }
+__CRT_INLINE int __cdecl __isgreater(double _X,double _Y) { return !__isunordered(_X,_Y) && _X > _Y; }
+__CRT_INLINE int __cdecl __isgreaterequal(double _X,double _Y) { return !__isunordered(_X,_Y) && _X >= _Y; }
+__CRT_INLINE int __cdecl __isless(double _X,double _Y) { return !__isunordered(_X,_Y) && _X < _Y; }
+__CRT_INLINE int __cdecl __islessequal(double _X,double _Y) { return !__isunordered(_X,_Y) && _X <= _Y; }
+__CRT_INLINE int __cdecl __islessgreater(double _X,double _Y) { return !__isunordered(_X,_Y) && _X != _Y; }
+#define isunordered(x,y) __isunordered(x,y)
+#define isgreater(x,y) __isgreater(x,y)
+#define isgreaterequal(x,y) __isgreaterequal(x,y)
+#define isless(x,y) __isless(x,y)
+#define islessequal(x,y) __islessequal(x,y)
+#define islessgreater(x,y) __islessgreater(x,y)
+#endif
+
 /* 7.12.14 */
 /* 
  *  With these functions, comparisons involving quiet NaNs set the FP
@@ -491,6 +515,7 @@ extern "C" {
  */
 
 #if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_MATH_H__ 202311L
 /* C23, in libtcc1.a */
 double __cdecl roundeven(double _X);
 float __cdecl roundevenf(float _X);
@@ -576,6 +601,46 @@ int __cdecl __issignalingl(long double);
 #define iscanonical(x) ((void)(x), 1)
 #define issubnormal(x) (fpclassify(x) == FP_SUBNORMAL)
 #define iszero(x) (fpclassify(x) == FP_ZERO)
+int __cdecl __iseqsig(double,double);
+#define iseqsig(x,y) __iseqsig(x,y)
+
+/* long is 32 bits; like FP_ILOGB0 and FP_ILOGBNAN */
+#define FP_LLOGB0 (-2147483647L-1)
+#define FP_LLOGBNAN (-2147483647L-1)
+long __cdecl llogb(double _X);
+long __cdecl llogbf(float _X);
+long __cdecl llogbl(long double _X);
+int __cdecl totalorder(const double *_X,const double *_Y);
+int __cdecl totalorderf(const float *_X,const float *_Y);
+int __cdecl totalorderl(const long double *_X,const long double *_Y);
+int __cdecl totalordermag(const double *_X,const double *_Y);
+int __cdecl totalordermagf(const float *_X,const float *_Y);
+int __cdecl totalordermagl(const long double *_X,const long double *_Y);
+double __cdecl getpayload(const double *_X);
+float __cdecl getpayloadf(const float *_X);
+long double __cdecl getpayloadl(const long double *_X);
+int __cdecl setpayload(double *_Res,double _Pl);
+int __cdecl setpayloadf(float *_Res,float _Pl);
+int __cdecl setpayloadl(long double *_Res,long double _Pl);
+int __cdecl setpayloadsig(double *_Res,double _Pl);
+int __cdecl setpayloadsigf(float *_Res,float _Pl);
+int __cdecl setpayloadsigl(long double *_Res,long double _Pl);
+/* narrowing, correctly rounded (to nearest) */
+#define __C23_NARROW(n) \
+  float __cdecl f##n(double _X,double _Y); \
+  float __cdecl f##n##l(long double _X,long double _Y); \
+  double __cdecl d##n##l(long double _X,long double _Y);
+__C23_NARROW(add)
+__C23_NARROW(sub)
+__C23_NARROW(mul)
+__C23_NARROW(div)
+#undef __C23_NARROW
+float __cdecl ffma(double _X,double _Y,double _Z);
+float __cdecl ffmal(long double _X,long double _Y,long double _Z);
+double __cdecl dfmal(long double _X,long double _Y,long double _Z);
+float __cdecl fsqrt(double _X);
+float __cdecl fsqrtl(long double _X);
+double __cdecl dsqrtl(long double _X);
 #endif
 
 /* Mini libm (inline __fpclassify*, __signbit* and variants) */

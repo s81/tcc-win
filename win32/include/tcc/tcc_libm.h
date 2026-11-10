@@ -269,9 +269,8 @@ __CRT_INLINE long double __cdecl nanl(const char* s) {
 
 
 /* Following are math functions missing from msvcrt.dll, and not defined
- * in math.h or above. Functions still remaining:
- * remquo(), remainder(), fma(), erf(), erfc(), nearbyint().
- * In <stdlib.h>: lldiv().
+ * in math.h or above. remquo(), remainder(), fma(), erf(), erfc() and
+ * nearbyint() are in libtcc1.a (lib/c23math.c).
  */
 
 __CRT_INLINE float __cdecl scalbnf(float x, int n) {
@@ -311,6 +310,7 @@ __CRT_INLINE long double __cdecl frexpl (long double x, int* y) {
 }
 
 
+#if defined(__i386__) || defined(__x86_64__)
 __CRT_INLINE double __cdecl rint(double x) {
 double retval;
   __asm__ (
@@ -390,6 +390,26 @@ __CRT_INLINE double __cdecl trunc(double _x) {
   __asm__ ("fldcw %0;" : : "m" (saved_cw) ); /* restore saved control word */
   return retval;
 }
+#else
+/* no x87: adding and subtracting 2^52 rounds in the current mode */
+__CRT_INLINE double __cdecl rint(double x) {
+  volatile double t = x;
+  if (!(x > -4503599627370496.0 && x < 4503599627370496.0))
+    return x;
+  if (x > 0) { t += 4503599627370496.0; t -= 4503599627370496.0; }
+  else { t -= 4503599627370496.0; t += 4503599627370496.0; }
+  return t == 0 ? (x < 0 ? -0.0 : 0.0) : t;
+}
+__CRT_INLINE float __cdecl rintf(float x) { return rint(x); }
+__CRT_INLINE long double __cdecl rintl(long double x) { return rint(x); }
+__CRT_INLINE long __cdecl lrint(double x) { return (long)rint(x); }
+__CRT_INLINE long __cdecl lrintf(float x) { return (long)rint(x); }
+__CRT_INLINE long __cdecl lrintl(long double x) { return (long)rint(x); }
+__CRT_INLINE long long __cdecl llrint(double x) { return (long long)rint(x); }
+__CRT_INLINE long long __cdecl llrintf(float x) { return (long long)rint(x); }
+__CRT_INLINE long long __cdecl llrintl(long double x) { return (long long)rint(x); }
+__CRT_INLINE double __cdecl trunc(double x) { return x < 0 ? ceil(x) : floor(x); }
+#endif
 
 __CRT_INLINE float __cdecl truncf(float x) {
   return (float) ((intptr_t) x);
