@@ -47,3 +47,57 @@ jobs:
     - name: C23 + ownership tests (compile, link and run)
       shell: bash
       run: TCC="$PWD/win32/tcc.exe" RUN=1 sh tests/tccwin-tests.sh
+
+  # tcc-win must be able to compile itself: stage 1 is built with MSVC,
+  # stage 2 with stage 1, stage 3 with stage 2. Stages 2 and 3 are built
+  # by the same compiler code, so their binaries must be byte-identical.
+  self-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            vcarch: amd64
+          - target: i386
+            vcarch: x86
+    name: self-host (${{ matrix.target }}-win32)
+    runs-on: windows-2025
+    timeout-minutes: 10
+    env:
+      T: ${{ matrix.target }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: stage 1 (built by MSVC)
+      shell: cmd
+      run: |
+        cd win32
+        for /f "delims=" %%i in ('vswhere.exe -latest -property installationPath') do call "%%i\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.vcarch }}
+        call build-tcc.bat -c cl -t %T%
+        if errorlevel 1 exit /b 1
+        xcopy /s /i /q /y . "%RUNNER_TEMP%\stage1" >nul || exit /b 1
+    - name: stage 2 (built by stage 1)
+      shell: cmd
+      run: |
+        cd win32
+        call build-tcc.bat -clean >nul
+        call build-tcc.bat -c "%RUNNER_TEMP%\stage1\tcc.exe" -t %T%
+        if errorlevel 1 exit /b 1
+        xcopy /s /i /q /y . "%RUNNER_TEMP%\stage2" >nul || exit /b 1
+    - name: stage 3 (built by stage 2)
+      shell: cmd
+      run: |
+        cd win32
+        call build-tcc.bat -clean >nul
+        call build-tcc.bat -c "%RUNNER_TEMP%\stage2\tcc.exe" -t %T%
+        if errorlevel 1 exit /b 1
+    - name: stage 2 and stage 3 are identical
+      shell: cmd
+      run: |
+        cd win32
+        for %%f in (tcc.exe libtcc.dll lib\libtcc1.a) do (
+          fc /b %%f "%RUNNER_TEMP%\stage2\%%f" >nul || (echo %%f differs between stage 2 and stage 3 & exit /b 1)
+          echo %%f: stage 2 == stage 3
+        )
+    - name: C23 + ownership tests with the stage 3 compiler (compile, link and run)
+      shell: bash
+      run: TCC="$PWD/win32/tcc.exe" RUN=1 sh tests/tccwin-tests.sh

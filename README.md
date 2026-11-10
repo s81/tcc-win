@@ -36,6 +36,18 @@ cd win32
 build-tcc.bat -c gcc -t x86_64
 ```
 
+tcc-win can also build itself. Copy a built `win32` directory elsewhere
+(for example to `C:\tcc`), then rebuild with it:
+
+```bat
+cd win32
+build-tcc.bat -clean
+build-tcc.bat -c C:\tcc\tcc.exe -t x86_64
+```
+
+CI bootstraps x86_64 and i386 this way in three stages (MSVC, then tcc-win
+twice) and requires the last two stages to be byte-identical.
+
 Cross compilers hosted on Linux:
 
 ```bash
