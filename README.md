@@ -46,7 +46,7 @@ build-tcc.bat -clean
 build-tcc.bat -c C:\tcc\tcc.exe -t x86_64
 ```
 
-CI bootstraps x86_64 and i386 this way in three stages (MSVC, then tcc-win
+CI bootstraps x86_64, i386 and arm64 this way in three stages (MSVC, then tcc-win
 twice) and requires the last two stages to be byte-identical.
 
 Cross compilers hosted on Linux:

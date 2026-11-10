@@ -65,9 +65,32 @@ Each owner is in one of the states *owned*, *moved* (also: uninitialized),
 - argument for a parameter declared `[[owner]]`: `free(a);`
 - operand of `return`: `return a;`
 
-**Null.** An owner initialized or assigned with `nullptr`/`0`, and an owner
-inside `if (!p) { ... }` (or in the `else` part of `if (p)`), is *null* and
-need not be released. Only these two test forms are recognised.
+**Null.** An owner that is *null* need not be released. An owner is null
+when it is initialized or assigned with a null constant (`nullptr`, `0`,
+`NULL`, `(void *)0`), and where a **null test** shows it is null:
+
+| Test | `p` is null |
+|---|---|
+| `if (!p)`, `if (p == NULL)` | in the `then` branch |
+| `if (p)`, `if (p != NULL)` | in the `else` branch (and after the `if` if the `then` branch returns) |
+| `while (p)`, `for (...; p != NULL; ...)` | after the loop, unless it was left by `break` |
+| `while (!p)`, `while (p == NULL)` | inside the loop body |
+
+A null test is one of `p`, `!p`, `p == N`, `p != N`, `N == p`, `N != p`, where
+`N` is a null constant, optionally in parentheses or negated with `!`. A
+condition that combines it with anything else (`p == NULL && n > 0`) does
+not narrow. `do ... while (p)` does not narrow either.
+
+```c
+void list_free([[owner]] struct node *n)
+{
+    while (n != NULL) {
+        [[owner]] struct node *next = n->next;
+        free(n);
+        n = next;
+    }                       // n is null here: no leak
+}
+```
 
 ## Borrows
 
@@ -187,9 +210,8 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.
 - Owners and borrows in structs, globals, statics and arrays are not tracked.
-- Conditions other than `if (p)` / `if (!p)` do not narrow to *null*
-  (e.g. `if (p == NULL)`, `while (p)`), and `[[owner]] T *p = NULL;` in a
-  declaration counts as *owned* (use `nullptr` or `0`).
+- Only the null tests listed under *Null* narrow to *null*; for example
+  `if (p == NULL || n == 0)` and `switch` do not.
 - Return values of `[[owner]]` functions may be discarded silently.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - Compilation stops at the first ownership error (as for all TinyCC errors).

@@ -90,10 +90,15 @@ jobs:
         include:
           - target: x86_64
             vcarch: amd64
+            os: windows-2025
           - target: i386
             vcarch: x86
+            os: windows-2025
+          - target: arm64
+            vcarch: arm64
+            os: windows-11-arm
     name: self-host (${{ matrix.target }}-win32)
-    runs-on: windows-2025
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     env:
       T: ${{ matrix.target }}
