@@ -490,6 +490,32 @@ extern "C" {
  *  which always returns true: yes, (NaN != NaN) is true).
  */
 
+#if __STDC_VERSION__ >= 202311L
+/* C23, in libtcc1.a */
+double __cdecl roundeven(double _X);
+float __cdecl roundevenf(float _X);
+long double __cdecl roundevenl(long double _X);
+double __cdecl nextup(double _X);
+float __cdecl nextupf(float _X);
+long double __cdecl nextupl(long double _X);
+double __cdecl nextdown(double _X);
+float __cdecl nextdownf(float _X);
+long double __cdecl nextdownl(long double _X);
+#define __C23_FMAXMIN(n) \
+  double __cdecl n(double _X,double _Y); \
+  float __cdecl n##f(float _X,float _Y); \
+  long double __cdecl n##l(long double _X,long double _Y);
+__C23_FMAXMIN(fmaximum)
+__C23_FMAXMIN(fminimum)
+__C23_FMAXMIN(fmaximum_num)
+__C23_FMAXMIN(fminimum_num)
+__C23_FMAXMIN(fmaximum_mag)
+__C23_FMAXMIN(fminimum_mag)
+__C23_FMAXMIN(fmaximum_mag_num)
+__C23_FMAXMIN(fminimum_mag_num)
+#undef __C23_FMAXMIN
+#endif
+
 /* Mini libm (inline __fpclassify*, __signbit* and variants) */
 #include "tcc/tcc_libm.h"
 
