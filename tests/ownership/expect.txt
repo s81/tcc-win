@@ -30,3 +30,7 @@ err_null_ne_branch.c owner 'p' still owns a resource at 'return'
 err_null_compound.c owner 'p' still owns a resource at 'return'
 err_null_while_break.c owner 'p' still owns a resource at 'return'
 err_null_while_not.c owner 'p' still owns a resource at 'return'
+err_loop_continue.c owner 'p' is moved inside a loop
+err_loop_maybe.c owner 'p' is moved inside a loop
+err_continue_leak.c owner 'q' still owns a resource at 'continue'
+err_break_leak.c owner 'q' still owns a resource at 'break'
