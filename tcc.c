@@ -123,6 +123,7 @@ static const char help2[] =
     "  leading-underscore            decorate extern symbols\n"
     "  ms-extensions                 allow anonymous struct in struct\n"
     "  dollars-in-identifiers        allow '$' in C symbols\n"
+    "  goto                          accept 'goto' (not supported by default)\n"
     "  reverse-funcargs              evaluate function arguments right to left\n"
     "  gnu89-inline                  'extern inline' is like 'static inline'\n"
     "  asynchronous-unwind-tables    create eh_frame section [on]\n"

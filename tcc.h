@@ -756,6 +756,7 @@ struct TCCState {
     unsigned char leading_underscore;
     unsigned char ms_extensions; /* allow nested named struct w/o identifier behave like unnamed */
     unsigned char dollars_in_identifiers;  /* allows '$' char in identifiers */
+    unsigned char allow_goto; /* -fgoto: accept 'goto' (legacy code) */
     unsigned char ms_bitfields; /* if true, emulate MS algorithm for aligning bitfields */
     unsigned char reverse_funcargs; /* if true, evaluate last function arg first */
     unsigned char gnu89_inline; /* treat 'extern inline' like 'static inline' */

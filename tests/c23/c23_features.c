@@ -19,6 +19,9 @@
 # define ELIFNDEF_OK 1
 #endif
 
+#ifndef __TCC_NO_GOTO__
+# error "__TCC_NO_GOTO__ must be defined without -fgoto"
+#endif
 static_assert(ELIFNDEF_OK);                 /* no message */
 static_assert(sizeof(bool) == 1, "bool");
 static_assert(alignof(int) == 4);
@@ -76,8 +79,7 @@ int main(void)
         z++;
     }
     CHECK(z == 2);
-    goto end;
-end:
+end:                                          /* a label needs no goto */
     int after_label = 1;                      /* declaration after label */
     CHECK(after_label);
     if (0)

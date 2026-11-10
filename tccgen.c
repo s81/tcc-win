@@ -8544,6 +8544,9 @@ again:
         goto block_after_label;
 
     } else if (t == TOK_GOTO) {
+        if (!tcc_state->allow_goto)
+            tcc_error("'goto' is not supported by tcc-win: use structured"
+                " control flow (or -fgoto for legacy code)");
         vla_restore(cur_scope->vla.locorig);
         if (tok == '*' && gnu_ext) {
             /* computed goto */
