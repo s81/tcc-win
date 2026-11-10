@@ -496,6 +496,15 @@ typedef struct SValue {
 } SValue;
 
 /* symbol attributes */
+#ifdef TCCW_SYMATTR16X2 /* TEMPORARY arm64 diagnosis: two 16-bit units */
+struct SymAttr {
+    unsigned short
+    aligned : 5, packed : 1, weak : 1, visibility : 2, dllexport : 1,
+    nodecorate : 1, dllimport : 1, addrtaken : 1, nodebug : 1, owner : 1,
+    cexpr : 1;
+    unsigned short borrow : 2, xxxx : 14;
+};
+#else
 struct SymAttr {
     unsigned
     aligned     : 5, /* alignment as log2+1 (0 == unspecified) */
@@ -512,6 +521,7 @@ struct SymAttr {
     borrow      : 2, /* 1 [[borrow]], 2 [[borrow_mut]] (borrow checked) */
     xxxx        : 14; /* not used */
 };
+#endif
 
 /* function attributes or temporary attributes for parsing */
 struct FuncAttr {
