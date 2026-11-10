@@ -114,8 +114,9 @@ tests/tccwin-tests.sh
 
 runs `tests/c23/` and `tests/ownership/` with the cross compiler (compile and
 link only; the CI executes them on Windows). With `RUN=1` and a native `TCC=...` it also executes the programs.
-The upstream test-suite is still available in `tests/` (`make test` after a
-native build).
+The upstream test suite runs with `make test` after a native build, and on
+Windows with `tests/test-win32.bat` (needs `make`, `sh` and gcc or clang as
+reference compiler). CI runs it on x86_64, i386 and arm64 Windows.
 
 ## Licence
 

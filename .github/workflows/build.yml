@@ -15,12 +15,12 @@ jobs:
       run: ./configure && make cross-x86_64-win32 cross-i386-win32 cross-arm64-win32
     - name: C23 + ownership tests (compile and link)
       run: tests/tccwin-tests.sh
-    - name: front-end regression tests (upstream suite, host build)
-      run: make && make -C tests -k tests2-dir pp-dir
+    - name: upstream test suite (host build)
+      run: make && make test -k
 
   x86_64-win32:
     runs-on: windows-2025
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - name: build (x86_64-win32)
@@ -32,10 +32,15 @@ jobs:
     - name: C23 + ownership tests (compile, link and run)
       shell: bash
       run: TCC="$PWD/win32/tcc.exe" RUN=1 sh tests/tccwin-tests.sh
+    - name: upstream test suite (gcc as reference compiler)
+      shell: cmd
+      run: |
+        cd tests
+        call test-win32.bat all -k
 
   i386-win32:
     runs-on: windows-2025
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - name: build (i386-win32)
@@ -47,6 +52,31 @@ jobs:
     - name: C23 + ownership tests (compile, link and run)
       shell: bash
       run: TCC="$PWD/win32/tcc.exe" RUN=1 sh tests/tccwin-tests.sh
+    - name: upstream test suite (32-bit gcc as reference compiler)
+      shell: cmd
+      run: |
+        cd tests
+        call test-win32.bat -p c:\mingw32\bin all -k
+
+  arm64-win32:
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+    - name: build (arm64-win32)
+      shell: cmd
+      run: |
+        cd win32
+        for /f "delims=" %%i in ('vswhere.exe -latest -property installationPath') do call "%%i\VC\Auxiliary\Build\vcvarsall.bat" arm64
+        call build-tcc.bat -c cl -t arm64
+    - name: C23 + ownership tests (compile, link and run)
+      shell: bash
+      run: TCC="$PWD/win32/tcc.exe" RUN=1 sh tests/tccwin-tests.sh
+    - name: upstream test suite (clang as reference compiler)
+      shell: cmd
+      run: |
+        cd tests
+        call test-win32.bat -c clang all -k
 
   # tcc-win must be able to compile itself: stage 1 is built with MSVC,
   # stage 2 with stage 1, stage 3 with stage 2. Stages 2 and 3 are built

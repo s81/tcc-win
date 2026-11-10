@@ -295,28 +295,11 @@ cross-test : tcctest.c examples/ex3.c
 	@echo ------------ $@ ------------
 	$(foreach T,$(CROSS-TGTS),$(call CROSS-COMPILE,$T))
 
+# tcc-win supports only the Windows targets
 CROSS-TGTS = \
- i386 \
  i386-win32 \
- i386-OpenBSD \
- x86_64 \
  x86_64-win32 \
- x86_64-osx \
- x86_64-FreeBSD \
- x86_64-NetBSD \
- x86_64-OpenBSD \
- arm-fpa \
- arm-eabihf \
- arm-NetBSD \
- arm-wince \
- arm64 \
- arm64-win32 \
- arm64-osx \
- arm64-FreeBSD \
- arm64-NetBSD \
- arm64-OpenBSD \
- riscv64 \
- c67
+ arm64-win32
 
 define CROSS-COMPILE
  @echo " . $(1)"
