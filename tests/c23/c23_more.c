@@ -97,24 +97,32 @@ static const unsigned char none[] = {
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IONBF, 0); /* keep output if a check crashes */
+    puts("[va_opt]");
     CHECK(COUNT() == 0 && COUNT(1) == 1 && COUNT(1, 2, 3) == 3);
     CHECK(SEL(5) == 5 && SEL(5, x) == 6);
     CHECK(CAT(4) == 42 && CAT(4, x) == 412);
     CHECK(!strcmp(STR(OPT()), "[]") && !strcmp(STR(OPT(1)), "[x 1 y]"));
 
+    puts("[va_start(ap)]");
     CHECK(sum(3, 1, 2, 3) == 6 && sum(0) == 0);
+    puts("[f(...)]");
     CHECK(mixed(1, 2.5, 3LL, "four", 5, 6) == 21.5);
+    puts("[f(...) struct return]");
     struct big b = bigret(7, 8);
     CHECK(b.a == 7 && b.b == 8);
+    puts("[f() and attributes]");
     CHECK(noargs() == 3);
     CHECK(attr_f(1) == 7 && sizeof(struct attr_s) == sizeof(int));
     CHECK(strlen((const char *)u8s) == 3 && sizeof(u8"ab") == 3);
     CHECK(!strcmp(STRV(1, "q"), "a 1, \"q\" b") && !strcmp(STRV(), ""));
 
+    puts("[constexpr float, #embed]");
     CHECK(tau == 6.5 && HALF * 4 == 2 && sizeof(HALF) == sizeof(float));
     CHECK(sizeof part == 5 && !memcmp(part, "<emb>", 5));
     CHECK(sizeof none == 2 && none[0] == 'e');
 
+    puts("[nullptr_t]");
     /* nullptr_t is a distinct type */
     CHECK(_Generic(nullptr, nullptr_t: 1, void *: 2, default: 3) == 1);
     CHECK(_Generic((void *)0, nullptr_t: 1, void *: 2, default: 3) == 2);
@@ -122,10 +130,12 @@ int main(void)
     int *ip = np;
     CHECK(ip == nullptr && !np);
 
+    puts("[compound literals]");
     /* storage class specifiers in compound literals */
     int *sp = (static int[]){ 1, 2, 3 };
     CHECK(sp[2] == 3 && (constexpr int){ 9 } == 9);
 
+    puts("[stdbit]");
     /* <stdbit.h> */
     CHECK(stdc_leading_zeros((unsigned char)1) == 7 && stdc_leading_zeros(0u) == 32);
     CHECK(stdc_leading_ones((unsigned short)0xf000) == 4);
@@ -143,6 +153,7 @@ int main(void)
     CHECK(sizeof(stdc_bit_floor((unsigned char)3)) == 1);
     CHECK(__STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_LITTLE__);
 
+    puts("[stdckdint]");
     /* <stdckdint.h> */
     int ri; unsigned ru; long long rl; unsigned long long rul; signed char rc;
     CHECK(!ckd_add(&ri, 1, 2) && ri == 3);

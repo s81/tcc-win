@@ -1,12 +1,13 @@
 # tcc-win
 
 A Windows-only fork of the [Tiny C Compiler](https://repo.or.cz/tinycc.git)
-(TinyCC `mob`, commit `aade7baf`, 2026-11-09) with two additions:
+(TinyCC `mob`, commit `aade7baf`, 2026-11-09) with three changes:
 
 1. **C23 by default** (`__STDC_VERSION__ == 202311L`).
 2. **Rust-like ownership and borrow checking** with non-lexical lifetimes
    for pointers marked `[[owner]]`, `[[borrow]]` and `[[borrow_mut]]`
    (opt-in, compile-time only, see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)).
+3. **No `goto`** (see [below](#no-goto)).
 
 ```c
 #include <stdlib.h>
@@ -106,6 +107,23 @@ Known deviations and gaps:
   such as `printf("%b")`, `memset_explicit` or `strdup` depend on it.
 - Old-style (K&R) function definitions are still accepted.
 
+## No goto
+
+`goto`, computed `goto *p` (GNU) and `asm goto` are compile errors:
+
+```
+error: 'goto' is not supported by tcc-win: use structured control flow (or -fgoto for legacy code)
+```
+
+This applies with every `-std=` setting, so tcc-win does not accept all
+conforming C programs. `-fgoto` accepts `goto` again for existing code; with it,
+the ownership checker does not follow `goto` paths. Without `-fgoto` the macro
+`__TCC_NO_GOTO__` is defined. Labels themselves are still allowed.
+
+tcc-win's own source, its runtime library and the upstream tests use `goto`,
+so the build passes `-fgoto` whenever tcc-win compiles them (`Makefile`,
+`lib/Makefile`, `win32/build-tcc.bat`).
+
 ## Tests
 
 ```bash
@@ -114,8 +132,9 @@ tests/tccwin-tests.sh
 
 runs `tests/c23/` and `tests/ownership/` with the cross compiler (compile and
 link only; the CI executes them on Windows). With `RUN=1` and a native `TCC=...` it also executes the programs.
-The upstream test-suite is still available in `tests/` (`make test` after a
-native build).
+The upstream test suite runs with `make test` after a native build, and on
+Windows with `tests/test-win32.bat` (needs `make`, `sh` and gcc or clang as
+reference compiler). CI runs it on x86_64, i386 and arm64 Windows.
 
 ## Licence
 

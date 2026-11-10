@@ -111,6 +111,8 @@ void parse_args(TCCState *s)
                 tcc_add_library_path(s, a+2);
             else if (a[1] == 'D')
                 tcc_define_symbol(s, a+2, NULL);
+            else if (a[1] == 'f')
+                tcc_set_options(s, a); /* e.g. -fgoto, tcc.c uses goto */
         }
     }
 }

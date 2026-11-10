@@ -21,6 +21,10 @@ LIBTCC1 = libtcc1.a
 LINK_LIBTCC =
 LIBS =
 CFLAGS += $(CPPFLAGS)
+# tcc-win does not accept 'goto' by default, but its own source uses it
+ifeq ($(CC_NAME),tcc)
+  CFLAGS += -fgoto
+endif
 VPATH = $(TOPSRC)
 -LTCC = $(TOP)/$(LIBTCC)
 
@@ -78,8 +82,9 @@ else
 endif
 
 # run local version of tcc with local libraries and includes
-TCCFLAGS-unx = -B$(TOP) -I$(TOPSRC)/include -I$(TOPSRC) -I$(TOP)
-TCCFLAGS-win = -B$(TOPSRC)/win32 -I$(TOPSRC)/include -I$(TOPSRC) -I$(TOP) -L$(TOP)
+# -fgoto: tcc-win's own source and the upstream tests use 'goto'
+TCCFLAGS-unx = -B$(TOP) -I$(TOPSRC)/include -I$(TOPSRC) -I$(TOP) -fgoto
+TCCFLAGS-win = -B$(TOPSRC)/win32 -I$(TOPSRC)/include -I$(TOPSRC) -I$(TOP) -L$(TOP) -fgoto
 TCCFLAGS = $(TCCFLAGS$(CFG))
 TCC_LOCAL = $(TOP)/tcc$(EXESUF)
 TCC = $(TCC_LOCAL) $(TCCFLAGS)

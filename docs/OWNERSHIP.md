@@ -180,8 +180,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   use in a later branch of the same `if` is an error, and a borrow that is
   reassigned in both branches of an `if` still counts as possibly holding
   the old value.
-- `goto` and `continue` paths are not tracked; a backward `goto` that forms
-  a loop does not keep a borrow alive.
+- `continue` paths are not tracked. `goto` is rejected by tcc-win unless
+  `-fgoto` is given; with `-fgoto`, `goto` paths are not tracked either (a
+  backward `goto` that forms a loop does not keep a borrow alive).
 - At most 128 conflicts are pending per function; beyond that a conflict is
   reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.

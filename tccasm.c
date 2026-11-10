@@ -1337,6 +1337,8 @@ ST_FUNC void asm_instr(void)
        volatile */
     while (tok == TOK_VOLATILE1 || tok == TOK_VOLATILE2 || tok == TOK_VOLATILE3
            || tok == TOK_GOTO) {
+        if (tok == TOK_GOTO && !tcc_state->allow_goto)
+            tcc_error("'asm goto' is not supported by tcc-win (use -fgoto for legacy code)");
         next();
     }
 

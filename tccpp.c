@@ -3902,6 +3902,8 @@ static void tcc_predefs(TCCState *s1, CString *cs, int is_asm)
     if (s1->do_bounds_check)
       putdef(cs, "__TCC_BCHECK__");
 #endif
+    if (!s1->allow_goto)
+      putdef(cs, "__TCC_NO_GOTO__");
     if (s1->char_is_unsigned)
       putdef(cs, "__CHAR_UNSIGNED__");
     if (s1->optimize > 0)

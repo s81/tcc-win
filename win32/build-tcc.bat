@@ -99,6 +99,8 @@ if %T%==arm64 set D=-DTCC_TARGET_PE -DTCC_TARGET_ARM64
 if "%D%"=="" echo %SELF%: error: unknown target '%T%'&&exit /B 1
 
 @if (%CC:~0,3%)==(gcc) set CC=%CC% -s -static
+@rem tcc-win rejects 'goto' by default, but its own source uses it
+@for /f "tokens=1" %%a in ("%CC%") do @if /i "%%~na"=="tcc" set CC=%CC% -fgoto
 @if (%BINDIR%)==() set BINDIR=%TCCDIR%
 
 :git_hash
@@ -185,25 +187,25 @@ exit /B %ERRORLEVEL%
 :make_lib
 @set LIBTCC1=libtcc1
 @if _%1_==_arm64_ set LIBTCC1=lib-arm64
-.\%1tcc -B. -c ../lib/%LIBTCC1%.c
-.\%1tcc -B. -c lib/crt1.c
-.\%1tcc -B. -c lib/crt1w.c
-.\%1tcc -B. -c lib/wincrt1.c
-.\%1tcc -B. -c lib/wincrt1w.c
-.\%1tcc -B. -c lib/dllcrt1.c
-.\%1tcc -B. -c lib/dllmain.c
-.\%1tcc -B. -c lib/winex.c
-.\%1tcc -B. -c lib/chkstk.S
-.\%1tcc -B. -c ../lib/alloca.S
-.\%1tcc -B. -c ../lib/alloca-bt.S
-.\%1tcc -B. -c ../lib/stdatomic.c
-.\%1tcc -B. -c ../lib/atomic.S
-.\%1tcc -B. -c ../lib/builtin.c
+.\%1tcc -B. -fgoto -c ../lib/%LIBTCC1%.c
+.\%1tcc -B. -fgoto -c lib/crt1.c
+.\%1tcc -B. -fgoto -c lib/crt1w.c
+.\%1tcc -B. -fgoto -c lib/wincrt1.c
+.\%1tcc -B. -fgoto -c lib/wincrt1w.c
+.\%1tcc -B. -fgoto -c lib/dllcrt1.c
+.\%1tcc -B. -fgoto -c lib/dllmain.c
+.\%1tcc -B. -fgoto -c lib/winex.c
+.\%1tcc -B. -fgoto -c lib/chkstk.S
+.\%1tcc -B. -fgoto -c ../lib/alloca.S
+.\%1tcc -B. -fgoto -c ../lib/alloca-bt.S
+.\%1tcc -B. -fgoto -c ../lib/stdatomic.c
+.\%1tcc -B. -fgoto -c ../lib/atomic.S
+.\%1tcc -B. -fgoto -c ../lib/builtin.c
 .\%1tcc -ar lib/%1libtcc1.a %LIBTCC1%.o crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o winex.o chkstk.o alloca.o alloca-bt.o stdatomic.o atomic.o builtin.o
-.\%1tcc -B. -c ../lib/bcheck.c -o lib/%1bcheck.o -bt -I..
-.\%1tcc -B. -c ../lib/bcheck.c -o lib/%1bcheck_run.o -bt -I.. -DBCHECK_RUN
-.\%1tcc -B. -c ../lib/bt-exe.c -o lib/%1bt-exe.o
-.\%1tcc -B. -c ../lib/bt-log.c -o lib/%1bt-log.o
-.\%1tcc -B. -c ../lib/bt-dll.c -o lib/%1bt-dll.o
-.\%1tcc -B. -c ../lib/runmain.c -o lib/%1runmain.o
+.\%1tcc -B. -fgoto -c ../lib/bcheck.c -o lib/%1bcheck.o -bt -I..
+.\%1tcc -B. -fgoto -c ../lib/bcheck.c -o lib/%1bcheck_run.o -bt -I.. -DBCHECK_RUN
+.\%1tcc -B. -fgoto -c ../lib/bt-exe.c -o lib/%1bt-exe.o
+.\%1tcc -B. -fgoto -c ../lib/bt-log.c -o lib/%1bt-log.o
+.\%1tcc -B. -fgoto -c ../lib/bt-dll.c -o lib/%1bt-dll.o
+.\%1tcc -B. -fgoto -c ../lib/runmain.c -o lib/%1runmain.o
 exit /B %ERRORLEVEL%

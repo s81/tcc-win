@@ -1722,6 +1722,7 @@ static const FlagDef options_f[] = {
     { offsetof(TCCState, leading_underscore), 0, "leading-underscore" },
     { offsetof(TCCState, ms_extensions), 0, "ms-extensions" },
     { offsetof(TCCState, dollars_in_identifiers), 0, "dollars-in-identifiers" },
+    { offsetof(TCCState, allow_goto), 0, "goto" },
     { offsetof(TCCState, test_coverage), 0, "test-coverage" },
     { offsetof(TCCState, reverse_funcargs), 0, "reverse-funcargs" },
     { offsetof(TCCState, gnu89_inline), 0, "gnu89-inline" },

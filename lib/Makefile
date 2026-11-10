@@ -14,8 +14,8 @@ TCC = $(TOP)/$(X)tcc$(EXESUF)
 XTCC ?= $(TOP)/$(X)tcc$(EXESUF)
 XCC = $(XTCC)
 XAR = $(XTCC) -ar
-XFLAGS-unx = -B$(TOPSRC)
-XFLAGS-win = -B$(TOPSRC)/win32 -I$(TOPSRC)/include
+XFLAGS-unx = -B$(TOPSRC) -fgoto
+XFLAGS-win = -B$(TOPSRC)/win32 -I$(TOPSRC)/include -fgoto
 XFLAGS = $(XFLAGS$(XCFG))
 BFLAGS = -bt
 
