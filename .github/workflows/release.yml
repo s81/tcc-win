@@ -1,13 +1,25 @@
 name: release
 
-# Pushing a tag 'vX.Y.Z' builds tcc-win for the three Windows targets,
-# tests the packaged compilers and publishes them as a GitHub Release.
-# Pull requests that change the packaging run the same build and tests,
-# and upload the zips as workflow artifacts, but publish nothing.
+# Publishes tcc-win for the three Windows targets as a GitHub Release.
+#
+# Two ways to start a release:
+# - Actions -> release -> "Run workflow" on main, with a version such as
+#   v0.1.0: the workflow creates the tag itself, then builds and publishes.
+# - Push a tag 'vX.Y.Z'.
+#
+# The packaged compilers are tested (compile, link and run) before anything
+# is published. Pull requests that change the packaging run the same build
+# and tests, and upload the zips as workflow artifacts, but publish nothing.
 
 on:
   push:
     tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. v0.1.0 (the tag is created on the selected branch, which must be main)'
+        required: true
+        type: string
   pull_request:
     paths:
     - .github/workflows/release.yml
@@ -17,7 +29,73 @@ permissions:
   contents: read
 
 jobs:
+  # work out the tag and version; nothing is changed here
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+    - uses: actions/checkout@v4
+    - id: v
+      name: tag and version
+      env:
+        EVENT: ${{ github.event_name }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        case "$EVENT" in
+          workflow_dispatch)
+            if [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "releases are made from main, not $GITHUB_REF"; exit 1
+            fi
+            tag=$INPUT_VERSION ;;
+          push) tag=$GITHUB_REF_NAME ;;
+          *) tag= ;;
+        esac
+        if [ -n "$tag" ]; then
+          # the tag is used in cmd and file names: allow only safe characters
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9][0-9A-Za-z.+-]*$'; then
+            echo "invalid version '$tag' (expected e.g. v0.1.0)"; exit 1
+          fi
+          version=${tag#v}
+        else
+          version="$(cat VERSION)-dev"
+        fi
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "tag: '$tag', version: '$version'"
+
+  # 'Run workflow' only: create the tag on the commit being released.
+  # A tag pushed with GITHUB_TOKEN does not start another workflow run.
+  tag:
+    needs: prepare
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: create and push the tag
+      env:
+        TAG: ${{ needs.prepare.outputs.tag }}
+        VERSION: ${{ needs.prepare.outputs.version }}
+      run: |
+        if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null; then
+          echo "tag $TAG already exists"; exit 1
+        fi
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git tag -a "$TAG" -m "tcc-win $VERSION" "$GITHUB_SHA"
+        git push origin "refs/tags/$TAG"
+
   package:
+    needs: [ prepare, tag ]
+    # 'tag' is skipped except for 'Run workflow'
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     strategy:
       fail-fast: true
       matrix:
@@ -36,21 +114,12 @@ jobs:
     timeout-minutes: 10
     env:
       T: ${{ matrix.target }}
+      V: ${{ needs.prepare.outputs.version }}
     steps:
     - uses: actions/checkout@v4
-    - name: version
-      shell: bash
-      run: |
-        case "$GITHUB_REF" in
-          refs/tags/v*) v=${GITHUB_REF#refs/tags/v} ;;
-          *) v="$(cat VERSION)-dev" ;;
-        esac
-        # the version is used in cmd and file names: allow only safe characters
-        if ! printf '%s' "$v" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$'; then
-          echo "invalid version '$v'"; exit 1
-        fi
-        echo "V=$v" >> "$GITHUB_ENV"
-        echo "version: $v"
+      with:
+        # build from the tag, so that 'tcc -v' names it (empty: default ref)
+        ref: ${{ needs.prepare.outputs.tag && format('refs/tags/{0}', needs.prepare.outputs.tag) || '' }}
     - name: build and install (MSVC)
       shell: cmd
       run: |
@@ -78,8 +147,8 @@ jobs:
         if-no-files-found: error
 
   publish:
-    needs: package
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ prepare, package ]
+    if: always() && needs.package.result == 'success' && needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -94,7 +163,8 @@ jobs:
     - name: create the release
       env:
         GH_TOKEN: ${{ github.token }}
+        TAG: ${{ needs.prepare.outputs.tag }}
       run: |
-        gh release create "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS \
-          --repo "$GITHUB_REPOSITORY" --title "tcc-win $GITHUB_REF_NAME" \
+        gh release create "$TAG" dist/*.zip dist/SHA256SUMS \
+          --repo "$GITHUB_REPOSITORY" --title "tcc-win $TAG" \
           --generate-notes --verify-tag

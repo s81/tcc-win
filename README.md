@@ -36,8 +36,10 @@ anywhere and run `tcc-win\tcc.exe`; it finds its headers and libraries next
 to itself. The binaries are built with MSVC and tested (compile, link and
 run) before they are published.
 
-To publish a release, push a tag such as `v0.1.0`; the `release` workflow
-does the rest.
+To publish a release, open *Actions → release → Run workflow* on GitHub,
+keep the branch `main`, enter a version such as `v0.1.0` and run it: the
+workflow creates the tag, builds and tests the zips, and publishes the
+release. Pushing a tag `v*` from a clone does the same.
 
 ## Building
 
