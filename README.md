@@ -4,8 +4,9 @@ A Windows-only fork of the [Tiny C Compiler](https://repo.or.cz/tinycc.git)
 (TinyCC `mob`, commit `aade7baf`, 2026-11-09) with two additions:
 
 1. **C23 by default** (`__STDC_VERSION__ == 202311L`).
-2. **Rust-like ownership checking** for pointers marked `[[owner]]`
-   (opt-in, compile-time only, see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)).
+2. **Rust-like ownership and borrow checking** for pointers marked
+   `[[owner]]`, `[[borrow]]` and `[[borrow_mut]]` (opt-in, compile-time only,
+   see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)).
 
 ```c
 #include <stdlib.h>
@@ -63,7 +64,7 @@ Use `-std=c11` or `-std=c99` to get the previous behaviour.
 | `auto` type inference | added (single plain declarator: `auto x = expr;`) |
 | `typeof`, `typeof_unqual` | upstream / added |
 | `_BitInt(N)`, `wb`/`uwb` constants | added for N <= 64 (`BITINT_MAXWIDTH` is 64, the minimum C23 requires) |
-| `[[attributes]]`: `noreturn`, `deprecated`, `fallthrough`, `maybe_unused`, `nodiscard`, `unsequenced`, `reproducible` | added: parsed in all positions; only `noreturn` (and `owner`) have an effect |
+| `[[attributes]]`: `noreturn`, `deprecated`, `fallthrough`, `maybe_unused`, `nodiscard`, `unsequenced`, `reproducible` | added: parsed in all positions; only `noreturn` (and `owner`, `borrow`, `borrow_mut`) have an effect |
 | `__has_c_attribute`, `__has_include`, `__has_embed` | added / upstream / added |
 | `#embed` with `limit`, `prefix`, `suffix`, `if_empty` | added (`limit` takes an integer constant, not an expression) |
 | `#elifdef`, `#elifndef`, `#warning` | added / added / upstream |

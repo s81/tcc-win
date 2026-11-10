@@ -497,7 +497,7 @@ typedef struct SValue {
 
 /* symbol attributes */
 struct SymAttr {
-    unsigned short
+    unsigned
     aligned     : 5, /* alignment as log2+1 (0 == unspecified) */
     packed      : 1,
     weak        : 1,
@@ -508,7 +508,9 @@ struct SymAttr {
     addrtaken   : 1,
     nodebug     : 1,
     owner       : 1, /* [[owner]]: owning pointer (move checked) */
-    cexpr       : 1; /* C23 constexpr floating constant (value in enum_val) */
+    cexpr       : 1, /* C23 constexpr floating constant (value in enum_val) */
+    borrow      : 2, /* 1 [[borrow]], 2 [[borrow_mut]] (borrow checked) */
+    xxxx        : 14; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */

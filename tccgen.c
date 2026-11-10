@@ -4107,33 +4107,83 @@ ST_FUNC int exact_log2p1(int i)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Ownership checking ("move semantics") for [[owner]] pointers.
+/* Ownership and borrow checking for [[owner]], [[borrow]] and [[borrow_mut]]
+   pointers (see docs/OWNERSHIP.md).
 
    A local variable or parameter of pointer type declared with [[owner]]
-   (or __attribute__((owner))) owns the resource it points to.  The
-   compiler tracks one state per owner along the control flow and
-   reports as errors:
+   owns the resource it points to.  [[borrow]] (shared, pointer to const)
+   and [[borrow_mut]] (exclusive) variables borrow from an owner or from
+   another borrow until the end of the block that declares them (lexical
+   lifetimes).  The compiler tracks the variables of one function along
+   the control flow and reports as errors:
      - use of an owner after it was moved (use-after-free/double free)
      - overwriting an owner that still owns its resource (leak)
      - an owner that is still owned at 'return' or at end of scope (leak)
+     - moving, assigning or taking the address of a borrowed variable
+     - using a variable while it is mutably borrowed
+     - a mutable borrow together with any other borrow of the same variable
+     - moving out of a borrow, returning a borrow of a local owner
+     - a borrow that outlives the variable it borrows from
    Ownership is moved by using the plain variable name as initializer of
    or right hand side of an assignment to another owner, as argument for
-   an [[owner]] parameter (e.g. free()), or as 'return' value.  All other
-   uses are borrows and are not checked. */
+   an [[owner]] parameter (e.g. free()), or as 'return' value.  A borrow
+   is created the same way with a [[borrow]]/[[borrow_mut]] variable or
+   parameter as destination.  All other uses are not checked. */
 
 #define OWN_MOVED 0 /* moved from, or not yet initialized */
-#define OWN_OWNED 1
+#define OWN_OWNED 1 /* owned (owner) or initialized (borrow) */
 #define OWN_MAYBE 2 /* moved on some paths only */
 #define OWN_NULL  3 /* known to be null: nothing to release */
-#define OWN_MAX 255
+#define OWN_MAX 64  /* tracked variables per function (bits of own_mask) */
 
-struct own_var { Sym *sym; int v; unsigned char st; };
-struct own_snap { int n, live; unsigned char st[OWN_MAX]; };
+#define OWN_OWNER  0
+#define OWN_SHARED 1 /* [[borrow]] */
+#define OWN_MUT    2 /* [[borrow_mut]] */
+
+typedef unsigned long long own_mask;
+
+struct own_var {
+    Sym *sym;
+    int v;
+    unsigned char st, kind;
+    own_mask of; /* borrows: the tracked variables borrowed from */
+};
+struct own_snap {
+    int n, live;
+    unsigned char st[OWN_MAX];
+    own_mask of[OWN_MAX];
+};
+/* the borrows that are passed to the function call being parsed */
+struct own_call {
+    struct own_call *prev;
+    int n;
+    struct own_var *v[16];
+    own_mask m[16];
+    unsigned char k[16];
+};
 
 static struct own_var own_vars[OWN_MAX];
 static int own_n, own_addrof;
-static struct own_var *own_pending; /* owner that is about to be assigned */
+static struct own_var *own_pending; /* variable that is about to be assigned */
 static struct own_snap *own_brk, *own_sw;
+static struct own_call *own_cur_call;
+/* variable about to be borrowed: conflicts are reported by the borrow */
+static struct own_var *own_lending;
+
+static const char *own_name(struct own_var *o)
+{
+    return get_tok_str(o->v, NULL);
+}
+
+static own_mask own_bit(struct own_var *o)
+{
+    return 1ULL << (o - own_vars);
+}
+
+static const char *own_kind_str(int kind)
+{
+    return kind == OWN_MUT ? "mutable" : kind == OWN_SHARED ? "shared" : "owner";
+}
 
 static struct own_var *own_find(Sym *s)
 {
@@ -4144,50 +4194,103 @@ static struct own_var *own_find(Sym *s)
     return NULL;
 }
 
+/* a live borrow other than 'skip' of a variable in 'mask'.
+   'kind' == OWN_MUT: only mutable borrows */
+static struct own_var *own_borrower(own_mask mask, int kind, struct own_var *skip)
+{
+    int i;
+    if (!mask)
+        return NULL;
+    for (i = 0; i < own_n; ++i) {
+        struct own_var *b = &own_vars[i];
+        if (b != skip && b->kind != OWN_OWNER && (b->of & mask)
+            && (kind != OWN_MUT || b->kind == OWN_MUT))
+            return b;
+    }
+    return NULL;
+}
+
 static void own_declare(Sym *s, int st)
 {
-    if (!s || !s->a.owner || nocode_wanted)
+    struct own_var *o;
+    const char *name;
+    int kind;
+
+    if (!s || !(s->a.owner || s->a.borrow) || nocode_wanted)
         return;
+    name = get_tok_str(s->v, NULL);
+    if (s->a.owner && s->a.borrow)
+        tcc_error("'%s' cannot be both [[owner]] and [[borrow]]", name);
+    kind = s->a.owner ? OWN_OWNER : s->a.borrow;
     if ((s->type.t & (VT_BTYPE|VT_ARRAY)) != VT_PTR)
-        tcc_error("[[owner]] requires a pointer type ('%s')",
-            get_tok_str(s->v, NULL));
+        tcc_error("[[%s]] requires a pointer type ('%s')",
+            kind == OWN_OWNER ? "owner" : kind == OWN_MUT ? "borrow_mut" : "borrow",
+            name);
+    if (kind == OWN_SHARED && !(pointed_type(&s->type)->t & VT_CONSTANT))
+        tcc_error("[[borrow]] requires a pointer to const ('%s');"
+            " use [[borrow_mut]] for write access", name);
     if ((s->r & VT_VALMASK) != VT_LOCAL) /* statics are not tracked */
         return;
     if (own_n >= OWN_MAX)
-        tcc_error("too many [[owner]] variables in function");
-    own_vars[own_n].sym = s;
-    own_vars[own_n].v = s->v;
-    own_vars[own_n++].st = st;
+        tcc_error("too many [[owner]]/[[borrow]] variables in function (max %d)",
+            OWN_MAX);
+    o = &own_vars[own_n++];
+    o->sym = s;
+    o->v = s->v;
+    o->st = st;
+    o->kind = kind;
+    o->of = 0;
 }
 
 /* an identifier was parsed, 'tok' is the token that follows it */
 static void own_use(Sym *s)
 {
-    struct own_var *o;
+    struct own_var *o, *b;
     const char *name;
     int addrof = own_addrof;
 
     own_pending = NULL, own_addrof = 0;
     if (!own_n || nocode_wanted || !(o = own_find(s)))
         return;
-    name = get_tok_str(o->v, NULL);
+    name = own_name(o);
     if (tok == '=') {
-        if (o->st == OWN_OWNED || o->st == OWN_MAYBE)
+        if ((b = own_borrower(own_bit(o), 0, NULL)))
+            tcc_error("cannot assign to '%s' while it is borrowed by '%s'",
+                name, own_name(b));
+        if (o->kind == OWN_OWNER && (o->st == OWN_OWNED || o->st == OWN_MAYBE))
             tcc_error("assignment overwrites owner '%s' which %s owns a resource (leak)",
                 name, o->st == OWN_OWNED ? "still" : "possibly still");
         own_pending = o;
-    } else if (addrof && tok != '[' && tok != TOK_ARROW && tok != '(') {
-        /* '&p': may be (re)initialized via the pointer */
-        o->st = OWN_OWNED;
-    } else if (o->st == OWN_MOVED) {
-        tcc_error("use of owner '%s' after move (or before initialization)", name);
-    } else if (o->st == OWN_MAYBE) {
-        tcc_error("use of owner '%s' which was moved on some paths", name);
+        return;
     }
+    if (addrof && tok != '[' && tok != TOK_ARROW && tok != '(') {
+        /* '&p': may be (re)initialized via the pointer */
+        if ((b = own_borrower(own_bit(o), 0, NULL)))
+            tcc_error("cannot take the address of '%s' while it is borrowed by '%s'",
+                name, own_name(b));
+        o->st = OWN_OWNED;
+        return;
+    }
+    if (o->st == OWN_MOVED) {
+        if (o->kind == OWN_OWNER)
+            tcc_error("use of owner '%s' after move (or before initialization)", name);
+        tcc_error("use of borrow '%s' before initialization", name);
+    } else if (o->st == OWN_MAYBE) {
+        if (o->kind == OWN_OWNER)
+            tcc_error("use of owner '%s' which was moved on some paths", name);
+        tcc_error("use of borrow '%s' which is not initialized on all paths", name);
+    }
+    if (o == own_lending) {
+        own_lending = NULL;
+        return;
+    }
+    if ((b = own_borrower(own_bit(o), OWN_MUT, NULL)))
+        tcc_error("cannot use '%s' while it is mutably borrowed by '%s'",
+            name, own_name(b));
 }
 
-/* if the expression that follows is just the name of an owner, return it.
-   'null_test': accept only if followed by ')' */
+/* if the expression that follows is just the name of a tracked variable,
+   return it.  'null_test': accept only if followed by ')' */
 static struct own_var *own_peek(int null_test)
 {
     struct own_var *o;
@@ -4239,22 +4342,122 @@ static int own_peek_nullinit(void)
 
 static void own_narrow(struct own_var *o)
 {
-    if (o && o->st == OWN_OWNED)
+    if (o && o->kind == OWN_OWNER && o->st == OWN_OWNED)
         o->st = OWN_NULL;
 }
 
-static void own_moved(struct own_var *o)
+/* ownership of 'o' is moved away */
+static void own_move(struct own_var *o)
 {
-    if (o)
-        o->st = OWN_MOVED;
+    struct own_var *b;
+    struct own_call *c;
+    int i;
+
+    if (!o || nocode_wanted)
+        return;
+    if (o->kind != OWN_OWNER)
+        tcc_error("cannot move out of borrow '%s'", own_name(o));
+    if ((b = own_borrower(own_bit(o), 0, NULL)))
+        tcc_error("cannot move owner '%s' while it is borrowed by '%s'",
+            own_name(o), own_name(b));
+    for (c = own_cur_call; c; c = c->prev)
+        for (i = 0; i < c->n; ++i)
+            if (c->m[i] & own_bit(o))
+                tcc_error("cannot move owner '%s' while it is borrowed"
+                    " by an argument of the same call", own_name(o));
+    o->st = OWN_MOVED;
 }
 
-/* owner 'o' was assigned the value on top of the value stack */
-static void own_assigned(struct own_var *o)
+/* borrow 'b' now borrows from 'src' (NULL: from something untracked) */
+static void own_borrow_init(struct own_var *b, struct own_var *src)
 {
-    if (o)
-        o->st = (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
-                && vtop->c.i == 0 ? OWN_NULL : OWN_OWNED;
+    struct own_var *c;
+
+    b->of = 0; /* the previous borrow ends */
+    b->st = OWN_OWNED;
+    if (!src)
+        return;
+    if (b->kind == OWN_MUT && src->kind == OWN_SHARED)
+        tcc_error("cannot borrow '%s' as mutable: it is a shared borrow",
+            own_name(src));
+    c = own_borrower(own_bit(src), b->kind == OWN_MUT ? 0 : OWN_MUT, b);
+    if (c)
+        tcc_error("cannot borrow '%s' as %s because it is also borrowed as %s by '%s'",
+            own_name(src), own_kind_str(b->kind), own_kind_str(c->kind), own_name(c));
+    b->of = own_bit(src) | src->of;
+}
+
+/* variable 'dst' was assigned the value on top of the value stack, which
+   is the plain name of 'src' if 'src' is not NULL */
+static void own_assign(struct own_var *dst, struct own_var *src)
+{
+    if (!dst || nocode_wanted)
+        return;
+    if (dst->kind == OWN_OWNER) {
+        own_move(src);
+        dst->st = (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
+                  && vtop->c.i == 0 ? OWN_NULL : OWN_OWNED;
+    } else {
+        own_borrow_init(dst, src);
+    }
+}
+
+/* 'return o;' */
+static void own_return(struct own_var *o)
+{
+    int i;
+    if (!o || nocode_wanted)
+        return;
+    if (o->kind == OWN_OWNER) {
+        own_move(o);
+        return;
+    }
+    /* a borrow may be returned only if it does not borrow from a local
+       owner (owners are always local, including [[owner]] parameters) */
+    for (i = 0; i < own_n; ++i)
+        if ((o->of >> i & 1) && own_vars[i].kind == OWN_OWNER)
+            tcc_error("cannot return borrow '%s' of local owner '%s'",
+                own_name(o), own_name(&own_vars[i]));
+}
+
+/* argument 'src' is passed to a [[borrow]] (kind OWN_SHARED) or
+   [[borrow_mut]] (OWN_MUT) parameter of the current call */
+static void own_call_borrow(struct own_var *src, int kind)
+{
+    struct own_call *c = own_cur_call;
+    struct own_var *b;
+    own_mask m;
+    int i;
+
+    if (!src || !c || nocode_wanted)
+        return;
+    if (kind == OWN_MUT && src->kind == OWN_SHARED)
+        tcc_error("cannot pass shared borrow '%s' as mutable borrow", own_name(src));
+    if (kind == OWN_MUT && (b = own_borrower(own_bit(src), 0, NULL)))
+        tcc_error("cannot pass '%s' as mutable borrow while it is borrowed by '%s'",
+            own_name(src), own_name(b));
+    m = own_bit(src) | src->of;
+    for (i = 0; i < c->n; ++i)
+        if ((c->m[i] & m) && (kind == OWN_MUT || c->k[i] == OWN_MUT))
+            tcc_error("'%s' and '%s' are passed to the same call and one of"
+                " them is a mutable borrow (aliasing)",
+                own_name(c->v[i]), own_name(src));
+    if (c->n < 16) {
+        c->v[c->n] = src;
+        c->m[c->n] = m;
+        c->k[c->n++] = kind;
+    }
+}
+
+/* argument for parameter 'sa' whose value is the plain name of 'mv' */
+static void own_arg(Sym *sa, struct own_var *mv)
+{
+    if (!sa || !mv)
+        return;
+    if (sa->a.owner)
+        own_move(mv);
+    else if (sa->a.borrow)
+        own_call_borrow(mv, sa->a.borrow);
 }
 
 static void own_check_leaks(int from, const char *where)
@@ -4264,19 +4467,29 @@ static void own_check_leaks(int from, const char *where)
         return;
     for (i = from; i < own_n; ++i) {
         int st = own_vars[i].st;
-        if (st == OWN_OWNED || st == OWN_MAYBE)
+        if (own_vars[i].kind == OWN_OWNER && (st == OWN_OWNED || st == OWN_MAYBE))
             tcc_error("owner '%s' %s owns a resource at %s (leak): release or move it",
-                get_tok_str(own_vars[i].v, NULL),
+                own_name(&own_vars[i]),
                 st == OWN_OWNED ? "still" : "possibly still", where);
     }
 }
 
 static void own_leave(int from)
 {
-    if (from < own_n) {
-        own_check_leaks(from, "end of scope");
-        own_n = from;
-    }
+    int i, j;
+    if (from >= own_n)
+        return;
+    own_check_leaks(from, "end of scope");
+    if (!nocode_wanted)
+        for (i = from; i < own_n; ++i)
+            for (j = 0; j < from; ++j)
+                if (own_vars[j].of & own_bit(&own_vars[i]))
+                    tcc_error("'%s' does not live long enough: it is still"
+                        " borrowed by '%s'", own_name(&own_vars[i]),
+                        own_name(&own_vars[j]));
+    for (j = 0; j < from; ++j)
+        own_vars[j].of &= (1ULL << from) - 1;
+    own_n = from;
 }
 
 static int own_join(int a, int b)
@@ -4295,14 +4508,14 @@ static void own_save(struct own_snap *sn)
     int i;
     sn->n = own_n, sn->live = !nocode_wanted;
     for (i = 0; i < own_n; ++i)
-        sn->st[i] = own_vars[i].st;
+        sn->st[i] = own_vars[i].st, sn->of[i] = own_vars[i].of;
 }
 
 static void own_restore(struct own_snap *sn)
 {
     int i;
     for (i = 0; i < sn->n && i < own_n; ++i)
-        own_vars[i].st = sn->st[i];
+        own_vars[i].st = sn->st[i], own_vars[i].of = sn->of[i];
 }
 
 /* join the current state (if reachable) into accumulator 'acc' */
@@ -4311,9 +4524,15 @@ static void own_acc(struct own_snap *acc, int live)
     int i;
     if (!live)
         return;
-    for (i = 0; i < acc->n && i < own_n; ++i)
-        acc->st[i] = acc->live ? own_join(acc->st[i], own_vars[i].st)
-                               : own_vars[i].st;
+    for (i = 0; i < acc->n && i < own_n; ++i) {
+        if (acc->live) {
+            acc->st[i] = own_join(acc->st[i], own_vars[i].st);
+            acc->of[i] |= own_vars[i].of; /* borrowed on any path */
+        } else {
+            acc->st[i] = own_vars[i].st;
+            acc->of[i] = own_vars[i].of;
+        }
+    }
     acc->live = 1;
 }
 
@@ -4339,10 +4558,11 @@ static void own_loop_end(struct own_snap *pre, struct own_snap *acc, int live)
     int i;
     if (live)
         for (i = 0; i < pre->n && i < own_n; ++i)
-            if (pre->st[i] == OWN_OWNED && own_vars[i].st == OWN_MOVED)
+            if (own_vars[i].kind == OWN_OWNER
+                && pre->st[i] == OWN_OWNED && own_vars[i].st == OWN_MOVED)
                 tcc_error("owner '%s' is moved inside a loop (it would be"
                     " used again in the next iteration)",
-                    get_tok_str(own_vars[i].v, NULL));
+                    own_name(&own_vars[i]));
     own_acc(acc, live);
     own_restore(pre);
     own_acc(acc, pre->live);
@@ -4392,6 +4612,10 @@ static int parse_c23_attribute(AttributeDef *ad)
             ad->f.func_noreturn = 1;
         else if (!strcmp(name, "owner") || !strcmp(name, "__owner__"))
             ad->a.owner = 1;
+        else if (!strcmp(name, "borrow") || !strcmp(name, "__borrow__"))
+            ad->a.borrow = OWN_SHARED;
+        else if (!strcmp(name, "borrow_mut") || !strcmp(name, "__borrow_mut__"))
+            ad->a.borrow = OWN_MUT;
         else if (t && strcmp(name, "deprecated") && strcmp(name, "fallthrough")
             && strcmp(name, "maybe_unused") && strcmp(name, "nodiscard")
             && strcmp(name, "unsequenced") && strcmp(name, "reproducible")
@@ -4625,6 +4849,16 @@ redo:
             if (!strcmp(get_tok_str(t, NULL), "owner")
                 || !strcmp(get_tok_str(t, NULL), "__owner__")) {
                 ad->a.owner = 1;
+                break;
+            }
+            if (!strcmp(get_tok_str(t, NULL), "borrow")
+                || !strcmp(get_tok_str(t, NULL), "__borrow__")) {
+                ad->a.borrow = OWN_SHARED;
+                break;
+            }
+            if (!strcmp(get_tok_str(t, NULL), "borrow_mut")
+                || !strcmp(get_tok_str(t, NULL), "__borrow_mut__")) {
+                ad->a.borrow = OWN_MUT;
                 break;
             }
             tcc_warning_c(warn_unsupported)("'%s' attribute ignored", get_tok_str(t, NULL));
@@ -5658,6 +5892,7 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                    nocode_wanted) Example: int func(int a, int b[++a]); */
                 s = sym_push(n, &pt, VT_LOCAL|VT_LVAL, 0);
                 s->a.owner = ad1.a.owner;
+                s->a.borrow = ad1.a.borrow;
                 *plast = s;
                 plast = &s->next;
                 if (tok == ')')
@@ -6776,7 +7011,7 @@ special_math_val:
             s = external_global_sym(t, &func_old_type);
         }
 
-        if (s->a.owner || own_addrof)
+        if (s->a.owner || s->a.borrow || own_addrof)
             own_use(s);
         r = s->r;
         /* A symbol that has a register is a local register variable,
@@ -6860,6 +7095,7 @@ special_math_val:
             Sym *sa;
             int nb_args, ret_nregs, ret_align, regsize, variadic;
             TokenString *p, *p2;
+            struct own_call ocall;
 
             /* function call  */
             if ((vtop->type.t & VT_BTYPE) != VT_FUNC) {
@@ -6926,6 +7162,8 @@ special_math_val:
             }
 
             p = NULL;
+            ocall.prev = own_cur_call, ocall.n = 0;
+            own_cur_call = &ocall;
             if (tok != ')') {
                 r = tcc_state->reverse_funcargs;
                 for(;;) {
@@ -6933,10 +7171,13 @@ special_math_val:
                         skip_or_save_block(&p2);
                         p2->prev = p, p = p2;
                     } else {
-                        struct own_var *mv = sa && sa->a.owner ? own_peek(0) : NULL;
+                        struct own_var *mv = sa && (sa->a.owner || sa->a.borrow)
+                                             ? own_peek(0) : NULL;
+                        own_lending = sa && sa->a.borrow == OWN_MUT ? mv : NULL;
                         expr_eq();
+                        own_lending = NULL;
                         gfunc_param_typed(s, sa);
-                        own_moved(mv);
+                        own_arg(sa, mv);
                     }
                     nb_args++;
                     if (sa)
@@ -6957,12 +7198,20 @@ special_math_val:
                     } while (p2 && sa);
                     p2 = p->prev;
                     begin_macro(p, 1), next();
-                    expr_eq();
-                    gfunc_param_typed(s, sa);
+                    {
+                        struct own_var *mv = sa && (sa->a.owner || sa->a.borrow)
+                                             ? own_peek(0) : NULL;
+                        own_lending = sa && sa->a.borrow == OWN_MUT ? mv : NULL;
+                        expr_eq();
+                        own_lending = NULL;
+                        gfunc_param_typed(s, sa);
+                        own_arg(sa, mv);
+                    }
                     end_macro();
                 }
                 vrev(n);
             }
+            own_cur_call = ocall.prev; /* call borrows end */
 
             next();
             vcheck_cmp(); /* the generators don't like VT_CMP on vtop */
@@ -7398,9 +7647,10 @@ static void expr_eq(void)
         next();
         if (t == '=') {
             mv = dst ? own_peek(0) : NULL;
+            own_lending = dst && dst->kind != OWN_OWNER ? mv : NULL;
             expr_eq();
-            own_assigned(dst);
-            own_moved(mv);
+            own_lending = NULL;
+            own_assign(dst, mv);
         } else {
             vdup();
             expr_eq();
@@ -7946,7 +8196,7 @@ again:
         if (tok != ';') {
             mv = own_peek(0);
             gexpr();
-            own_moved(mv);
+            own_return(mv);
             if (b) {
                 gen_assign_cast(&func_vt);
             } else {
@@ -9369,11 +9619,11 @@ static void gen_function(Sym *sym)
     }
     tcc_debug_prolog_epilog(tcc_state, 0);
     func_vla_arg(sym);
-    own_n = 0, own_brk = own_sw = NULL, own_pending = NULL;
+    own_n = 0, own_brk = own_sw = NULL, own_pending = NULL, own_cur_call = NULL;
     {
         Sym *pa;
         for (pa = sym->type.ref->next; pa; pa = pa->next)
-            if (pa->a.owner && (pa->v & ~SYM_FIELD) < SYM_FIRST_ANOM)
+            if ((pa->a.owner || pa->a.borrow) && (pa->v & ~SYM_FIELD) < SYM_FIRST_ANOM)
                 own_declare(sym_find(pa->v & ~SYM_FIELD), OWN_OWNED);
     }
     block(0);
@@ -9800,13 +10050,20 @@ static int decl(int l)
                         else if (l == VT_CONST)
                             /* uninitialized global variables may be overridden */
                             type.t |= VT_EXTERN;
-                        if (ad.a.owner && r == (VT_LOCAL|VT_LVAL)) {
+                        if ((ad.a.owner || ad.a.borrow) && r == (VT_LOCAL|VT_LVAL)) {
                             struct own_var *mv = has_init ? own_peek(0) : NULL;
                             int st = !has_init ? OWN_MOVED
                                 : own_peek_nullinit() ? OWN_NULL : OWN_OWNED;
+                            int n0 = own_n;
+                            own_lending = ad.a.borrow ? mv : NULL;
                             decl_initializer_alloc(&type, &ad, r, has_init, v, l);
-                            own_moved(mv);
-                            own_declare(sym_find(v), st);
+                            own_lending = NULL;
+                            if (ad.a.owner)
+                                own_move(mv);
+                            own_declare(sym_find(v), ad.a.owner ? st
+                                : has_init ? OWN_OWNED : OWN_MOVED);
+                            if (ad.a.borrow && has_init && own_n > n0)
+                                own_borrow_init(&own_vars[own_n - 1], mv);
                         } else
                         decl_initializer_alloc(&type, &ad, r, has_init, v, l);
                         if (auto_str) {
