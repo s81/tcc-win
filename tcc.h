@@ -516,7 +516,8 @@ struct SymAttr {
     cexpr       : 1; /* C23 constexpr floating constant (value in enum_val) */
     unsigned short
     borrow      : 2, /* 1 [[borrow]], 2 [[borrow_mut]] (borrow checked) */
-    xxxx        : 14; /* not used */
+    cexpr_agg   : 1, /* C23 constexpr struct/union/array object */
+    xxxx        : 13; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */

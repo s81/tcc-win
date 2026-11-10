@@ -4,3 +4,6 @@ err_va_start.c 'va_start' used in function with fixed arguments
 err_constexpr.c constant expression expected
 err_goto.c 'goto' is not supported by tcc-win: use structured control flow (or -fgoto for legacy code)
 err_asm_goto.c 'asm goto' is not supported by tcc-win (use -fgoto for legacy code)
+err_constexpr_noinit.c constexpr object 'p' must be initialized
+err_constexpr_nonconst.c initializer element is not constant
+err_constexpr_assign.c cannot modify a member of a constexpr object
