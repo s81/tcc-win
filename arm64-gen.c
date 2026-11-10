@@ -1056,6 +1056,9 @@ ST_FUNC void gfunc_call(int nb_args)
     stack = arm64_pcs(
 #ifdef TCC_TARGET_PE
         old_style ? /* all args like varargs in K&R style */ -1 :
+        /* C23 'f(...)' without named parameter: all args are varargs
+           (0 would mean 'not variadic') */
+        variadic && var_nb_arg == 0 ? -1 :
 #endif
         var_nb_arg, nb_args + 1, t, a);
 
@@ -1265,7 +1268,12 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         t[i] = &int_type;
 #endif
 
-    arm64_func_va_list_stack = arm64_pcs(var_nb_arg, n, t, a);
+    arm64_func_va_list_stack = arm64_pcs(
+#ifdef TCC_TARGET_PE
+        /* C23 'f(...)' without named parameter (0: not variadic) */
+        variadic && var_nb_arg == 0 ? -1 :
+#endif
+        var_nb_arg, n, t, a);
 
 #ifdef TCC_TARGET_PE
     if (variadic)
