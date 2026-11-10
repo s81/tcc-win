@@ -91,6 +91,7 @@
     # define __TCC_C_ATTR_reproducible 202207L
     # define __TCC_C_ATTR_owner 202311L
     # define __TCC_OWNERSHIP__ 1
+    # define __BITINT_MAXWIDTH__ 64
     #endif
     #if __STDC_VERSION__ >= 201112L
     # define __STDC_NO_ATOMICS__ 1
@@ -335,10 +336,20 @@
     __BOTH(void*, alloca, (__SIZE_TYPE__))
     void *alloca(__SIZE_TYPE__);
     __BUILTIN(void, abort, (void))
+    /* no declaration without prototype in C23: redirect by name */
+    #if __STDC_VERSION__ >= 202311L && defined __TCC_BCHECK__
+    # define longjmp __bound_longjmp
+    #else
     __BOUND(void, longjmp, ())
+    #endif
 #if !defined _WIN32
+    #if __STDC_VERSION__ >= 202311L && defined __TCC_BCHECK__
+    # define mmap __bound_mmap
+    # define munmap __bound_munmap
+    #else
     __BOUND(void*, mmap, ())
     __BOUND(int, munmap, ())
+    #endif
 #endif
     #undef __BUILTINBC
     #undef __BUILTIN

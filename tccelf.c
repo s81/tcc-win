@@ -1700,7 +1700,7 @@ ST_FUNC void tcc_add_btstub(TCCState *s1)
 
     cstr_new(&cstr);
     cstr_printf(&cstr,
-        "extern void __bt_init(),__bt_exit(),__bt_init_dll();"
+        "extern void __bt_init(void*,int),__bt_exit(void*),__bt_init_dll(int);"
         "static void *__rt_info[];"
         "__attribute__((constructor)) static void __bt_init_rt(){");
 #ifdef TCC_TARGET_PE
@@ -1752,7 +1752,7 @@ static void tcc_tcov_add_file(TCCState *s1, const char *filename)
     cstr_new(&cstr);
     cstr_printf(&cstr,
         "extern char *__tcov_data[];"
-        "extern void __store_test_coverage ();"
+        "extern void __store_test_coverage (void*);"
         "__attribute__((destructor)) static void __tcov_exit() {"
         "__store_test_coverage(__tcov_data);"
         "}");

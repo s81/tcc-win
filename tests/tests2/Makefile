@@ -92,6 +92,8 @@ FLAGS =
 76_dollars_in_identifiers.test : FLAGS += -fdollars-in-identifiers
 # tcc-win: these tests rely on pre-C23 rules (C23 is the default now)
 60_errors_and_warnings.test 95_bitfields.test 95_bitfields_ms.test 102_alignas.test : FLAGS += -std=c11
+# ... and on functions declared without prototype: '()' is '(void)' in C23
+46_grep.test 81_types.test 112_backtrace.test 129_scopes.test 133_old_func.test : FLAGS += -std=c11
 ifneq (-$(CONFIG_WIN32)-,-yes-)
 22_floating_point.test: FLAGS += -lm
 24_math_library.test: FLAGS += -lm

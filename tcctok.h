@@ -44,6 +44,7 @@
      DEF(TOK_GENERIC, "_Generic")
      DEF(TOK_STATIC_ASSERT, "_Static_assert")
      DEF(TOK_NULLPTR, "nullptr") /* C23 */
+     DEF(TOK_BITINT, "_BitInt") /* C23 */
      DEF(TOK_CONSTEXPR, "constexpr") /* C23 */
      DEF(TOK_TYPEOF_UNQUAL, "typeof_unqual") /* C23 */
 
@@ -98,6 +99,7 @@
      DEF(TOK___TIME__, "__TIME__")
      DEF(TOK___FUNCTION__, "__FUNCTION__")
      DEF(TOK___VA_ARGS__, "__VA_ARGS__")
+     DEF(TOK___VA_OPT__, "__VA_OPT__")
      DEF(TOK___COUNTER__, "__COUNTER__")
      DEF(TOK___HAS_INCLUDE, "__has_include")
      DEF(TOK___HAS_INCLUDE_NEXT, "__has_include_next")
@@ -176,6 +178,7 @@
      DEF(TOK_builtin_choose_expr, "__builtin_choose_expr")
      DEF(TOK_builtin_constant_p, "__builtin_constant_p")
      DEF(TOK_builtin_frame_address, "__builtin_frame_address")
+     DEF(TOK_builtin_va_last, "__builtin_va_last")
      DEF(TOK_builtin_return_address, "__builtin_return_address")
      DEF(TOK_builtin_expect, "__builtin_expect")
      DEF(TOK_builtin_unreachable, "__builtin_unreachable")

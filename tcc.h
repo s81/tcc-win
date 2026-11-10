@@ -508,7 +508,7 @@ struct SymAttr {
     addrtaken   : 1,
     nodebug     : 1,
     owner       : 1, /* [[owner]]: owning pointer (move checked) */
-    xxxx        : 1; /* not used */
+    cexpr       : 1; /* C23 constexpr floating constant (value in enum_val) */
 };
 
 /* function attributes or temporary attributes for parsing */
@@ -1075,7 +1075,8 @@ struct filespec {
 #define VT_TYPEDEF 0x00008000  /* typedef definition */
 #define VT_INLINE  0x00010000  /* inline definition */
 #define VT_TLS     0x00020000  /* thread-local storage */
-/* currently unused: 0x000[48]0000  */
+#define VT_BITINT  0x00040000  /* C23 _BitInt(N): N is in type.ref->c */
+/* currently unused: 0x00080000  */
 
 #define VT_STRUCT_SHIFT 20     /* shift for bitfield shift values (32 - 2*6) */
 #define VT_STRUCT_MASK (((1U << (6+6)) - 1) << VT_STRUCT_SHIFT | VT_BITFIELD)
@@ -1094,7 +1095,7 @@ struct filespec {
 
 /* type mask (except storage) */
 #define VT_STORAGE (VT_EXTERN | VT_STATIC | VT_TYPEDEF | VT_INLINE | VT_TLS)
-#define VT_TYPE (~(VT_STORAGE|VT_STRUCT_MASK))
+#define VT_TYPE (~(VT_STORAGE|VT_STRUCT_MASK|VT_BITINT))
 
 /* symbol was created by tccasm.c first */
 #define VT_ASM (VT_VOID | 4 << VT_STRUCT_SHIFT)
@@ -1188,8 +1189,10 @@ struct filespec {
 #define TOK_PPNUM   0xcd /* preprocessor number */
 #define TOK_PPSTR   0xce /* preprocessor string */
 #define TOK_LINENUM 0xcf /* line number info */
+#define TOK_CWB     0xd0 /* C23 _BitInt constant (suffix wb) */
+#define TOK_CUWB    0xd1 /* C23 unsigned _BitInt constant (suffix uwb) */
 
-#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_LINENUM)
+#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_CUWB)
 
 #define TOK_EOF       (-1)  /* end of file */
 #define TOK_LINEFEED  10    /* line feed */

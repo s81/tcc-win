@@ -37,6 +37,21 @@
 #define USHRT_MAX 0xffff
 #define INT_MIN (-2147483647 - 1)
 #define INT_MAX 2147483647
+#if __STDC_VERSION__ >= 202311L
+#define BITINT_MAXWIDTH 64
+#define BOOL_WIDTH 1
+#define CHAR_WIDTH 8
+#define SCHAR_WIDTH 8
+#define UCHAR_WIDTH 8
+#define SHRT_WIDTH 16
+#define USHRT_WIDTH 16
+#define INT_WIDTH 32
+#define UINT_WIDTH 32
+#define LONG_WIDTH 32
+#define ULONG_WIDTH 32
+#define LLONG_WIDTH 64
+#define ULLONG_WIDTH 64
+#endif
 #define UINT_MAX 0xffffffff
 #define LONG_MIN (-2147483647L - 1)
 #define LONG_MAX 2147483647L

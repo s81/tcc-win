@@ -29,5 +29,8 @@
 
 typedef unsigned short char16_t;
 typedef unsigned int char32_t;
+#if __STDC_VERSION__ >= 202311L
+typedef unsigned char char8_t;
+#endif
 #endif /* __STDC_VERSION__ >= 201112L */
 #endif /* _INC_UCHAR */

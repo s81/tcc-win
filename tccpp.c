@@ -541,6 +541,8 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
     case TOK_CULONG:
     case TOK_CLLONG:
     case TOK_CULLONG:
+    case TOK_CWB:
+    case TOK_CUWB:
         /* XXX: not quite exact, but only useful for testing  */
         sprintf(p, "%llu", (unsigned long long)cv->i);
         break;
@@ -986,6 +988,8 @@ static inline int tok_size(const int *p)
     case TOK_CDOUBLE:
     case TOK_CLLONG:
     case TOK_CULLONG:
+    case TOK_CWB:
+    case TOK_CUWB:
         return 1 + 2;
     case TOK_CLDOUBLE:
         return 1 + LDOUBLE_WORDS;
@@ -1119,6 +1123,8 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
     case TOK_CDOUBLE:
     case TOK_CLLONG:
     case TOK_CULLONG:
+    case TOK_CWB:
+    case TOK_CUWB:
 #if LONG_SIZE == 8
     case TOK_CLONG:
     case TOK_CULONG:
@@ -1199,6 +1205,8 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
     case TOK_CDOUBLE:
     case TOK_CLLONG:
     case TOK_CULLONG:
+    case TOK_CWB:
+    case TOK_CUWB:
 #if LONG_SIZE == 8
     case TOK_CLONG:
     case TOK_CULONG:
@@ -1330,7 +1338,9 @@ static int pp_embed(TCCState *s1, int test)
     char name[1024], buf[1024];
     const char *dir;
     unsigned char data[4096];
-    int c, i, n, fd, total = 0;
+    int c, i, n, fd, total = 0, level, par;
+    long long limit = -1;
+    CString pfx, sfx, emp, *cs;
 
     c = skip_spaces();
     if (c != '<' && c != '\"')
@@ -1338,17 +1348,50 @@ static int pp_embed(TCCState *s1, int test)
     cstr_reset(&tokcstr);
     file->buf_ptr = parse_pp_string(file->buf_ptr, c == '<' ? '>' : c, &tokcstr);
     pstrncpy(name, sizeof name, tokcstr.data, tokcstr.size);
-    next_nomacro();
-    if (test) {
-        while (tok != ')' && tok != TOK_LINEFEED && tok != TOK_EOF)
-            next_nomacro(); /* ignore parameters */
-        if (tok != ')')
-            expect("')'");
-    } else {
-        if (tok != TOK_LINEFEED)
-            tcc_warning("#embed parameters are not supported (ignored)");
-        skip_to_eol(0);
+    cstr_new(&pfx), cstr_new(&sfx), cstr_new(&emp);
+    /* embed parameters: limit(n) prefix(...) suffix(...) if_empty(...) */
+    for (next();; ) {
+        if (tok == TOK_LINEFEED || tok == TOK_EOF || (test && tok == ')'))
+            break;
+        if (tok < TOK_IDENT)
+            tcc_error("#embed: parameter name expected");
+        dir = get_tok_str(tok, NULL);
+        par = !strcmp(dir, "limit") || !strcmp(dir, "__limit__") ? 1
+            : !strcmp(dir, "prefix") || !strcmp(dir, "__prefix__") ? 2
+            : !strcmp(dir, "suffix") || !strcmp(dir, "__suffix__") ? 3
+            : !strcmp(dir, "if_empty") || !strcmp(dir, "__if_empty__") ? 4 : 0;
+        if (!par)
+            tcc_error("#embed: unknown parameter '%s'", dir);
+        next();
+        if (tok != '(')
+            expect("'('");
+        next();
+        if (par == 1) {
+            if (tok != TOK_CINT && tok != TOK_CUINT && tok != TOK_CLLONG
+                && tok != TOK_CULLONG && tok != TOK_CLONG && tok != TOK_CULONG)
+                tcc_error("#embed: limit must be an integer constant");
+            limit = tokc.i;
+            next();
+            if (tok != ')')
+                expect("')'");
+        } else {
+            cs = par == 2 ? &pfx : par == 3 ? &sfx : &emp;
+            cstr_reset(cs);
+            for (level = 1;; next()) {
+                if (tok == TOK_LINEFEED || tok == TOK_EOF)
+                    expect("')'");
+                if (tok == '(')
+                    ++level;
+                else if (tok == ')' && --level == 0)
+                    break;
+                cstr_cat(cs, get_tok_str(tok, &tokc), -1);
+                cstr_ccat(cs, ' ');
+            }
+        }
+        next();
     }
+    if (test && tok != ')')
+        expect("')'");
     fd = -1;
     for (i = 0; fd < 0; ++i) {
         int k = i - 2 - s1->nb_include_paths;
@@ -1377,12 +1420,33 @@ static int pp_embed(TCCState *s1, int test)
         fd = open(buf, O_RDONLY | O_BINARY);
     }
     cstr_reset(&tokcstr);
-    while ((n = read(fd, data, sizeof data)) > 0) {
+    while (limit && (n = read(fd, data, sizeof data)) > 0) {
+        if (limit >= 0 && n > limit - total)
+            n = limit - total;
         for (i = 0; !test && i < n; ++i)
             cstr_printf(&tokcstr, total + i ? ",%d" : "%d", data[i]);
         total += n;
+        if (total == limit)
+            break;
     }
     close(fd);
+    if (!test) {
+        /* build: prefix data suffix, or if_empty */
+        CString res;
+        cstr_new(&res);
+        if (total) {
+            if (pfx.size) cstr_cat(&res, pfx.data, pfx.size);
+            cstr_cat(&res, tokcstr.data, tokcstr.size);
+            cstr_ccat(&res, ' ');
+            if (sfx.size) cstr_cat(&res, sfx.data, sfx.size);
+        } else {
+            if (emp.size) cstr_cat(&res, emp.data, emp.size);
+        }
+        cstr_reset(&tokcstr);
+        if (res.size) cstr_cat(&tokcstr, res.data, res.size);
+        cstr_free(&res);
+    }
+    cstr_free(&pfx), cstr_free(&sfx), cstr_free(&emp);
     if (test)
         return total ? 1 : 2;
     cstr_ccat(&tokcstr, '\n');
@@ -2534,7 +2598,7 @@ static void parse_number(const char *p)
         }
     } else {
         unsigned long long n, n1;
-        int lcount, ucount, ov = 0;
+        int lcount, ucount, ov = 0, wb = 0;
         const char *p1;
 
         /* integer number */
@@ -2583,9 +2647,18 @@ static void parse_number(const char *p)
                     tcc_error("two 'u's in integer constant");
                 ucount++;
                 ch = *p++;
+            } else if (t == 'W' && toup(*p) == 'B' && !lcount && !wb) {
+                /* C23 _BitInt constant: wb, uwb, wbu */
+                wb = 1;
+                ch = p[1], p += 2;
             } else {
                 break;
             }
+        }
+        if (wb) {
+            if (lcount)
+                tcc_error("incorrect integer suffix: %s", p1);
+            wb += ucount;
         }
 
         /* in #if/#elif expressions, all numbers have type (u)intmax_t anyway */
@@ -2611,7 +2684,7 @@ static void parse_number(const char *p)
                 ucount = 1;
         }
 
-        if (ov)
+        if (ov && wb != 2)
             tcc_warning("integer constant overflow");
 
         tok = TOK_CINT;
@@ -2622,6 +2695,8 @@ static void parse_number(const char *p)
 	}
 	if (ucount)
 	    ++tok; /* TOK_CU... */
+        if (wb && !pp_expr)
+            tok = wb == 2 ? TOK_CUWB : TOK_CWB;
         tokc.i = n;
     }
     if (ch)
@@ -2810,10 +2885,10 @@ maybe_newline:
         tok = ts->tok;
         break;
     case 'u':
-        if (p[1] == '8' && p[2] == '\''
+        if (p[1] == '8' && (p[2] == '\'' || p[2] == '\"')
             && !(parse_flags & PARSE_FLAG_ASM_FILE)) {
-            /* C23 u8 character constant */
-            p += 2, c = '\'';
+            /* C23 u8 character constant, C11 u8 string literal */
+            c = p[2], p += 2;
             is_long = 0;
             goto str_const;
         }
@@ -3099,10 +3174,103 @@ static int macro_subst(
 
 /* substitute arguments in replacement lists in macro_str by the values in
    args (field d) and return allocated string */
+/* C23 __VA_OPT__: rewrite the macro body for one expansion.
+   '__VA_OPT__(tokens)' becomes 'tokens' if the variable argument has
+   tokens, otherwise it becomes the (empty) variable argument itself so
+   that '#' and '##' next to it behave as with an empty argument. */
+static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args);
+
+static int *macro_va_opt(Sym **nested_list, const int *macro_str, Sym *args)
+{
+    TokenString str, in;
+    CValue cval;
+    Sym *va;
+    int t, last = 0, level, empty, hash_pos = 0, strfy;
+
+    for (va = args; va && !va->type.t; va = va->prev)
+        ;
+    if (!va)
+        tcc_error("__VA_OPT__ can only be used in a variadic macro");
+    empty = *va->d == TOK_EOF;
+    tok_str_new(&str);
+    for (;;) {
+        TOK_GET(&t, &macro_str, &cval);
+        if (!t)
+            break;
+        if (t != TOK___VA_OPT__) {
+            if (t == '#')
+                hash_pos = str.len;
+            tok_str_add2(&str, t, &cval);
+            if (t != ' ')
+                last = t;
+            continue;
+        }
+        do
+            TOK_GET(&t, &macro_str, &cval);
+        while (t == ' ');
+        if (t != '(')
+            tcc_error("'(' expected after __VA_OPT__");
+        /* '#__VA_OPT__(...)': stringize the replacement */
+        strfy = last == '#' && !empty;
+        tok_str_new(&in);
+        if (empty)
+            tok_str_add(&str, va->v);
+        for (level = 1;;) {
+            TOK_GET(&t, &macro_str, &cval);
+            if (!t)
+                tcc_error("unterminated __VA_OPT__");
+            if (t == TOK___VA_OPT__)
+                tcc_error("__VA_OPT__ may not be nested");
+            if (t == '(')
+                ++level;
+            else if (t == ')' && --level == 0)
+                break;
+            if (strfy)
+                tok_str_add2(&in, t, &cval);
+            else if (!empty)
+                tok_str_add2(&str, t, &cval);
+        }
+        if (strfy) {
+            int *res;
+            const int *st;
+            tok_str_add(&in, 0);
+            st = res = macro_arg_subst(nested_list, in.str, args);
+            cstr_reset(&tokcstr);
+            cstr_ccat(&tokcstr, '\"');
+            while (*st) {
+                const char *s;
+                TOK_GET(&t, &st, &cval);
+                if (t == TOK_PLCHLDR)
+                    continue;
+                s = get_tok_str(t, &cval);
+                while (*s) {
+                    if (t == TOK_PPSTR && *s != '\'')
+                        add_char(&tokcstr, *s);
+                    else
+                        cstr_ccat(&tokcstr, *s);
+                    ++s;
+                }
+            }
+            cstr_ccat(&tokcstr, '\"');
+            cstr_ccat(&tokcstr, '\0');
+            cval.str.size = tokcstr.size;
+            cval.str.data = tokcstr.data;
+            str.len = hash_pos; /* drop the '#' */
+            tok_str_add2(&str, TOK_PPSTR, &cval);
+            tok_str_free_str(res);
+        }
+        tok_str_free_str(in.str);
+        last = ')';
+    }
+    tok_str_add(&str, 0);
+    return str.str;
+}
+
 static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args)
 {
     int t, t0, t1, t2, n;
     const int *st;
+    int *va_opt_str;
     Sym *s;
     CValue cval;
     TokenString str;
@@ -3115,6 +3283,15 @@ static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args)
         tok_print(s->d, "%*s - arg: %s:", indent, "", get_tok_str(s->v, 0));
     }
 #endif
+
+    va_opt_str = NULL;
+    for (st = macro_str; *st; ) {
+        TOK_GET(&t, &st, &cval);
+        if (t == TOK___VA_OPT__) {
+            macro_str = va_opt_str = macro_va_opt(nested_list, macro_str, args);
+            break;
+        }
+    }
 
     tok_str_new(&str);
     t0 = t1 = 0;
@@ -3214,6 +3391,7 @@ static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args)
             t0 = t1, t1 = t;
     }
     tok_str_add(&str, 0);
+    tok_str_free_str(va_opt_str);
     PP_PRINT(("areslt:", 0, str.str));
     return str.str;
 }

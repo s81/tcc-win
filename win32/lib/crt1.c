@@ -70,7 +70,7 @@ void _tstart(void)
 // =============================================
 // for 'tcc -run ,,,'
 
-__attribute__((weak)) extern int __run_on_exit();
+__attribute__((weak)) extern int __run_on_exit(int);
 
 int _runtmain(int argc, /* as tcc passed in */ char **argv)
 {

@@ -75,6 +75,8 @@ ST_DATA int func_ind; /* function start address */
 static int func_old;
 ST_DATA const char *funcname;
 ST_DATA CType int_type, func_old_type, char_type, char_pointer_type;
+static CType nullptr_type; /* C23 nullptr_t */
+static Sym *func_va_last; /* last named parameter of current function */
 static CString initstr;
 
 #if PTR_SIZE == 4
@@ -392,6 +394,8 @@ ST_FUNC void tccgen_init(TCCState *s1)
         char_type.t |= VT_UNSIGNED;
     char_pointer_type = char_type;
     mk_pointer(&char_pointer_type);
+    nullptr_type.t = VT_VOID;
+    mk_pointer(&nullptr_type);
 
     func_old_type.t = VT_FUNC;
     func_old_type.ref = sym_push(SYM_FIELD, &int_type, 0, 0);
@@ -2875,6 +2879,12 @@ static int compare_types(CType *type1, CType *type2, int unqualified)
     } else if (IS_ENUM(type2->t))
         type2 = &type2->ref->type;
 
+    /* C23 _BitInt(N) types are distinct from each other and from all others */
+    if ((type1->t ^ type2->t) & VT_BITINT)
+        return 0;
+    if ((type1->t & VT_BITINT) && type1->ref->c != type2->ref->c)
+        return 0;
+
     t1 = type1->t & VT_TYPE;
     t2 = type2->t & VT_TYPE;
     if (unqualified) {
@@ -2890,6 +2900,10 @@ static int compare_types(CType *type1, CType *type2, int unqualified)
     }
     /* XXX: bitfields ? */
     if (t1 != t2)
+        return 0;
+    /* C23 nullptr_t is distinct from 'void *' */
+    if ((t1 & (VT_BTYPE|VT_ARRAY)) == VT_PTR
+        && (type1->ref == nullptr_type.ref) != (type2->ref == nullptr_type.ref))
         return 0;
 
     if ((t1 & VT_ARRAY)
@@ -3050,11 +3064,147 @@ static int combine_types(CType *dest, SValue *op1, SValue *op2, int op)
 }
 
 /* generic gen_op: handles types problems */
+/* ------------------------------------------------------------------------- */
+/* C23 bit-precise integers: _BitInt(N) with N <= 64 (BITINT_MAXWIDTH).
+   A _BitInt(N) is stored in the smallest of char/short/int/long long that
+   holds N bits and is always kept sign- or zero-extended to that type.
+   Unlike other small integers it is not promoted to 'int': arithmetic is
+   done in N bits and wraps (or is truncated) to N bits. */
+
+static void mk_bitint(CType *type, int n, int uns)
+{
+    type->t = (n <= 8 ? VT_BYTE | VT_DEFSIGN : n <= 16 ? VT_SHORT
+               : n <= 32 ? VT_INT : VT_LLONG)
+              | VT_BITINT | (uns ? VT_UNSIGNED : 0);
+    type->ref = sym_push(SYM_FIELD, &int_type, 0, n);
+}
+
+/* convert the value on top of stack from/to a _BitInt type.
+   Returns 0 if the regular gen_cast() has to do (the rest of) the work. */
+static int gen_cast_bitint(CType *type)
+{
+    CType b;
+    int n, w, uns;
+
+    if (vtop->type.t & VT_BITINT) {
+        if ((type->t & VT_BITINT) && type->ref->c == vtop->type.ref->c
+            && !((type->t ^ vtop->type.t) & VT_UNSIGNED))
+            return 1; /* same type */
+        /* the value is valid for the underlying type */
+        vtop->type.t &= ~VT_BITINT;
+    }
+    if (!(type->t & VT_BITINT))
+        return 0;
+    n = type->ref->c;
+    uns = type->t & VT_UNSIGNED;
+    w = n <= 32 ? 32 : 64;
+    b.t = (n <= 32 ? VT_INT : VT_LLONG) | uns;
+    b.ref = NULL;
+    gen_cast(&b);
+    if (n < w) { /* reduce to N bits */
+        if (uns) {
+            vpush64(b.t, (1ULL << n) - 1);
+            gen_op('&');
+        } else {
+            vpushi(w - n);
+            gen_op(TOK_SHL);
+            vpushi(w - n);
+            gen_op(TOK_SAR);
+        }
+    }
+    b.t = type->t & (VT_BTYPE | VT_UNSIGNED | VT_DEFSIGN);
+    gen_cast(&b);
+    vtop->type = *type;
+    vtop->type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
+    return 1;
+}
+
+static void bitint_info(CType *t, int *w, int *uns, int *bi)
+{
+    int bt = t->t & VT_BTYPE;
+    *uns = !!(t->t & VT_UNSIGNED);
+    *bi = !!(t->t & VT_BITINT);
+    if (*bi) {
+        *w = t->ref->c;
+    } else if (bt == VT_LLONG) {
+        *w = 64;
+    } else {
+        *w = 32;
+        if (bt != VT_INT || (t->t & VT_BITFIELD))
+            *uns = 0; /* promoted to int */
+    }
+}
+
+/* binary operation with at least one _BitInt operand.  Returns 0 if
+   gen_op() has to handle it (pointer or floating point operand) */
+static int gen_op_bitint(int op)
+{
+    int w1, u1, b1, w2, u2, b2, rw, ru, rb;
+    int shift = op == TOK_SHL || op == TOK_SAR || op == TOK_SHR;
+    CType r, c;
+
+    if (!is_integer_btype(vtop[-1].type.t & VT_BTYPE)
+        || !is_integer_btype(vtop[0].type.t & VT_BTYPE)) {
+        if (is_integer_btype(vtop[-1].type.t & VT_BTYPE))
+            vtop[-1].type.t &= ~VT_BITINT;
+        if (is_integer_btype(vtop[0].type.t & VT_BTYPE))
+            vtop[0].type.t &= ~VT_BITINT;
+        return 0;
+    }
+    bitint_info(&vtop[-1].type, &w1, &u1, &b1);
+    bitint_info(&vtop[0].type, &w2, &u2, &b2);
+    /* usual arithmetic conversions: the wider type wins; with equal
+       width a standard type wins over _BitInt and unsigned over signed */
+    if (shift || w1 > w2)
+        rw = w1, ru = u1, rb = b1;
+    else if (w2 > w1)
+        rw = w2, ru = u2, rb = b2;
+    else
+        rw = w1, ru = u1 | u2, rb = b1 & b2;
+    if (rb) {
+        mk_bitint(&r, rw, ru);
+    } else {
+        r.t = (rw == 64 ? VT_LLONG : VT_INT) | (ru ? VT_UNSIGNED : 0);
+        r.ref = NULL;
+    }
+    /* the type the operation is computed in */
+    c.t = (rw <= 32 ? VT_INT : VT_LLONG) | (ru ? VT_UNSIGNED : 0);
+    c.ref = NULL;
+    if (shift) {
+        gen_cast_s(VT_INT);
+    } else {
+        gen_cast(&r);
+        gen_cast(&c);
+    }
+    vswap();
+    gen_cast(&r);
+    gen_cast(&c);
+    vswap();
+    if (op == TOK_SAR && ru)
+        op = TOK_SHR;
+    gen_op(op);
+    if (!TOK_ISCOND(op))
+        gen_cast(&r);
+    return 1;
+}
+
+/* unary operators keep the _BitInt type of their operand */
+static void gen_unary_bitint(CType *type)
+{
+    if (type->t & VT_BITINT) {
+        type->t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
+        gen_cast(type);
+    }
+}
+
 ST_FUNC void gen_op(int op)
 {
     int t1, t2, bt1, bt2, t;
     CType type1, combtype;
     int op_class = op;
+
+    if (((vtop[-1].type.t | vtop[0].type.t) & VT_BITINT) && gen_op_bitint(op))
+        return;
 
     if (op == TOK_SHR || op == TOK_SAR || op == TOK_SHL)
         op_class = SHIFT_OP;
@@ -3267,6 +3417,9 @@ static void gen_cast(CType *type)
 {
     int sbt, dbt, sf, df, c;
     int dbt_bt, sbt_bt, ds, ss, bits, trunc;
+
+    if (((type->t | vtop->type.t) & VT_BITINT) && gen_cast_bitint(type))
+        return;
 
     /* special delayed cast for char/short */
     if (vtop->r & VT_MUSTCAST)
@@ -3734,6 +3887,10 @@ ST_FUNC void vstore(void)
     sbt = vtop->type.t & VT_BTYPE;
     dbt = ft & VT_BTYPE;
     verify_assign_cast(&vtop[-1].type);
+    if ((ft & VT_BITINT) && sbt != VT_STRUCT) {
+        gen_cast(&vtop[-1].type); /* C23 _BitInt: reduce to N bits */
+        sbt = vtop->type.t & VT_BTYPE;
+    }
 
     if (sbt == VT_STRUCT) {
         /* if structure, only generate pointer */
@@ -4878,6 +5035,8 @@ do_decl:
                 if (v < TOK_UIDENT)
                     expect("identifier");
                 next();
+                while (tok == '[' && parse_c23_attribute(NULL))
+                    ; /* C23 enumerator attributes */
                 if (tok == '=') {
                     next();
 		    ll = expr_const64();
@@ -5081,7 +5240,7 @@ static void parse_btype_qualify(CType *type, int qualifiers)
 static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
 {
     int t, u, bt, st, type_found, typespec_found, g, n;
-    int c23 = 0, unq;
+    int c23 = 0, unq, bitint_n = 0;
     Sym *s;
     CType type1;
 
@@ -5243,6 +5402,18 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
         case TOK_REGISTER:
             next();
             break;
+        case TOK_BITINT: /* C23 _BitInt(N) */
+            next();
+            skip('(');
+            bitint_n = expr_const();
+            skip(')');
+            if (bitint_n < 1 || bitint_n > 64)
+                tcc_error("_BitInt width must be between 1 and 64 (BITINT_MAXWIDTH)");
+            if (bt != -1 || st != -1)
+                tcc_error("too many basic types");
+            bt = VT_INT;
+            typespec_found = 1;
+            break;
         case TOK_CONSTEXPR: /* C23 */
             c23 |= 1;
             t |= VT_CONSTANT;
@@ -5357,6 +5528,14 @@ the_end:
         if ((t & (VT_DEFSIGN|VT_BTYPE)) == VT_BYTE)
             t |= VT_UNSIGNED;
     }
+    if (bitint_n) {
+        CType bi;
+        if (bitint_n < 2 && !(t & VT_UNSIGNED))
+            tcc_error("signed _BitInt must have a width of at least 2");
+        mk_bitint(&bi, bitint_n, t & VT_UNSIGNED);
+        t = (t & ~(VT_BTYPE | VT_LONG | VT_UNSIGNED | VT_DEFSIGN)) | bi.t;
+        type->ref = bi.ref;
+    }
     /* VT_LONG is used just as a modifier for VT_INT / VT_LLONG */
     bt = t & (VT_BTYPE|VT_LONG);
     if (bt == VT_LONG)
@@ -5419,6 +5598,8 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
     TokenString *vla_array_tok = NULL;
     int *vla_array_str = NULL;
 
+    while (tok == '[' && parse_c23_attribute(ad))
+        ; /* C23 attributes after the declarator */
     if (tok == '(') {
         /* function type, or recursive declarator (return if so) */
         next();
@@ -5433,7 +5614,11 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
 
 	if (tok == ')')
 	  l = 0;
-	else if (parse_btype(&pt, &ad1, 0))
+	else if (tok == TOK_DOTS && tcc_state->cversion >= 202311) {
+	  /* C23: variadic function without named parameter */
+	  next();
+	  l = -1;
+	} else if (parse_btype(&pt, &ad1, 0))
 	  l = FUNC_NEW;
 	else if (td & (TYPE_DIRECT|TYPE_ABSTRACT)) {
             sym_pop(ps, sr->prev, 0);
@@ -5446,7 +5631,9 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
         first = NULL;
         plast = &first;
         arg_size = 0;
-        if (l) {
+        if (l == -1) {
+            l = FUNC_ELLIPSIS;
+        } else if (l) {
             for(;;) {
                 /* read param name and compute offset */
                 if (l != FUNC_OLD) {
@@ -5485,12 +5672,15 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
 		    tcc_error("invalid type");
             }
         } else
-            /* if no parameters, then old type prototype */
-            l = FUNC_OLD;
+            /* if no parameters, then old type prototype.
+               In C23 '()' is the same as '(void)'. */
+            l = tcc_state->cversion >= 202311 ? FUNC_NEW : FUNC_OLD;
         skip(')');
         /* A function return value has the unqualified version of its
            declared type. */
         type->t &= ~VT_QUAL;
+        while (tok == '[' && parse_c23_attribute(ad))
+            ; /* C23 attributes after the parameter list */
         /* some ancient pre-K&R C allows a function to return an array
            and the array brackets to be put after the arguments, such 
            that "int c()[]" means something like "int[] c()" */
@@ -6022,6 +6212,23 @@ ST_FUNC void unary(void)
 	vsetc(&type, VT_CONST, &tokc);
         next();
         break;
+    case TOK_CWB:
+    case TOK_CUWB: /* C23: smallest _BitInt that holds the value */
+        {
+            unsigned long long v = tokc.i;
+            for (n = 0; v; v >>= 1)
+                ++n;
+            if (tok == TOK_CUWB)
+                n += !n;
+            else if (++n > 64)
+                tcc_error("_BitInt constant too large");
+            else
+                n += n < 2;
+            mk_bitint(&type, n, tok == TOK_CUWB);
+            vsetc(&type, VT_CONST, &tokc);
+            next();
+        }
+        break;
     case TOK_CUINT:
         t = VT_INT | VT_UNSIGNED;
         goto push_tokc;
@@ -6089,13 +6296,14 @@ ST_FUNC void unary(void)
         next();
         /* cast ? */
         if (parse_btype(&type, &ad, 0)) {
+            int cl_constexpr = btype_c23 & 1;
             type_decl(&type, &ad, &n, TYPE_ABSTRACT);
             skip(')');
             /* check ISOC99 compound literal */
             if (tok == '{') {
                     /* data is allocated locally by default */
-                if (global_expr)
-                    r = VT_CONST;
+                if (global_expr || (type.t & VT_STATIC) || cl_constexpr)
+                    r = VT_CONST; /* C23: (static T){...}, (constexpr T){...} */
                 else
                     r = VT_LOCAL;
                 /* all except arrays are lvalues */
@@ -6143,11 +6351,30 @@ ST_FUNC void unary(void)
         unary();
         indir();
         break;
+    case TOK_builtin_va_last:
+        /* the last named parameter of the current function, or a dummy
+           object just below the first variable argument if there is none.
+           Used by the C23 'va_start(ap)' */
+        next();
+        if (!func_var)
+            tcc_error("'va_start' used in function with fixed arguments");
+        if (func_va_last) {
+            s = func_va_last;
+            r = s->r;
+            if ((r & VT_VALMASK) < VT_CONST)
+                r = (r & ~VT_VALMASK) | VT_LOCAL;
+            vset(&s->type, r, s->c);
+            vtop->sym = s;
+        } else {
+            type.t = VT_SIZE_T;
+            type.ref = NULL;
+            vset(&type, VT_LOCAL | VT_LVAL, PTR_SIZE + (func_vc ? PTR_SIZE : 0));
+        }
+        break;
     case TOK_NULLPTR: /* C23 */
         next();
         vpushi(0);
-        vtop->type.t = VT_VOID;
-        mk_pointer(&vtop->type);
+        vtop->type = nullptr_type;
         break;
     case '&':
         next();
@@ -6175,8 +6402,10 @@ ST_FUNC void unary(void)
     case '~':
         next();
         unary();
+        type = vtop->type;
         vpushi(-1);
         gen_op('^');
+        gen_unary_bitint(&type);
         break;
     case '+':
         next();
@@ -6187,8 +6416,10 @@ ST_FUNC void unary(void)
 	   where we really need an noop (otherwise -0.0 will be transformed
 	   into +0.0).  */
 	if (!is_float(vtop->type.t)) {
+	    type = vtop->type;
 	    vpushi(0);
 	    gen_op('+');
+	    gen_unary_bitint(&type);
 	}
         break;
     case TOK_SIZEOF:
@@ -6417,9 +6648,11 @@ ST_FUNC void unary(void)
 	if (is_float(vtop->type.t)) {
             gen_opif(TOK_NEG);
 	} else {
+            type = vtop->type;
             vpushi(0);
             vswap();
             gen_op('-');
+            gen_unary_bitint(&type);
         }
         break;
     case TOK_LAND:
@@ -6568,6 +6801,16 @@ special_math_val:
 #endif
         } else if (r == VT_CONST && IS_ENUM_VAL(s->type.t)) {
             vtop->c.i = s->enum_val;
+        } else if (s->a.cexpr) {
+            double d;
+            memcpy(&d, &s->enum_val, sizeof d);
+            memset(&vtop->c, 0, sizeof vtop->c);
+            if ((s->type.t & VT_BTYPE) == VT_FLOAT)
+                vtop->c.f = d;
+            else if ((s->type.t & VT_BTYPE) == VT_DOUBLE)
+                vtop->c.d = d;
+            else
+                vtop->c.ld = d;
         }
         break;
     }
@@ -9110,7 +9353,20 @@ static void gen_function(Sym *sym)
     rsym = 0;
     nb_temp_local_vars = 0;
 
+    func_vc = 0;
     gfunc_prolog(sym);
+    {
+        Sym *pa, *last = NULL;
+        for (pa = sym->type.ref->next; pa; pa = pa->next)
+            last = pa;
+        func_va_last = NULL;
+        if (last)
+            for (pa = local_stack; pa; pa = pa->prev)
+                if (pa->v == (last->v & ~SYM_FIELD)) {
+                    func_va_last = pa;
+                    break;
+                }
+    }
     tcc_debug_prolog_epilog(tcc_state, 0);
     func_vla_arg(sym);
     own_n = 0, own_brk = own_sw = NULL, own_pending = NULL;
@@ -9352,6 +9608,28 @@ static int decl(int l)
                         tcc_error("redefinition of '%s'", get_tok_str(v, NULL));
                     sym = sym_push(v, &tc, VT_CONST, 0);
                     sym->enum_val = ll;
+                    has_init = 1;
+                    goto next_decl;
+                } else if ((c23 & 1) && !(type.t & VT_ARRAY) && is_float(type.t)) {
+                    /* C23 constexpr floating object: a named constant */
+                    double d;
+                    CType tc = type;
+                    next();
+                    expr_const1();
+                    tc.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE);
+                    gen_cast(&tc);
+                    if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) != VT_CONST)
+                        expect("constant expression");
+                    d = (tc.t & VT_BTYPE) == VT_FLOAT ? vtop->c.f
+                      : (tc.t & VT_BTYPE) == VT_DOUBLE ? vtop->c.d : (double)vtop->c.ld;
+                    vpop();
+                    sym = sym_find(v);
+                    if (sym && sym->sym_scope == local_scope)
+                        tcc_error("redefinition of '%s'", get_tok_str(v, NULL));
+                    tc.t |= VT_CONSTANT;
+                    sym = sym_push(v, &tc, VT_CONST, 0);
+                    memcpy(&sym->enum_val, &d, sizeof d);
+                    sym->a.cexpr = 1;
                     has_init = 1;
                     goto next_decl;
                 }
