@@ -283,5 +283,16 @@ struct timezone {
 /* Adding timespec definition.  */
 #include <sys/timeb.h>
 
+#if __STDC_VERSION__ >= 201112L
+/* C11/C23, in libtcc1.a */
+#define TIME_UTC 1
+int __cdecl timespec_get(struct timespec *_Ts,int _Base);
+#endif
+#if __STDC_VERSION__ >= 202311L
+int __cdecl timespec_getres(struct timespec *_Ts,int _Base);
+struct tm *__cdecl gmtime_r(const time_t *_Time,struct tm *_Tm);
+time_t __cdecl timegm(struct tm *_Tm);
+#endif
+
 #endif /* End _TIME_H_ */
 

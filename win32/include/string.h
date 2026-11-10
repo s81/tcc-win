@@ -156,6 +156,12 @@ extern "C" {
 #endif
 #endif
 
+#if __STDC_VERSION__ >= 202311L
+  /* C23, in libtcc1.a */
+  void *__cdecl memset_explicit(void *_Dst,int _Val,size_t _Size);
+  char *__cdecl strndup(const char *_Src,size_t _MaxCount);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

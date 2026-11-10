@@ -52,23 +52,34 @@ C17. It is not exhaustive: optional features (decimal floating point
 | `INFINITY`, `NAN` (and the other new macros) in `<float.h>` | not defined there (they are in `<math.h>`) |
 | `*_WIDTH` macros in `<stdint.h>` (`INT32_WIDTH`, `INTPTR_WIDTH`, ...) | not defined |
 
-## Library: gaps
+## Library: supported
 
 tcc-win links against `msvcrt.dll`, the Windows system C runtime, which
-predates C11/C23. These functions are not declared and not available:
+predates C11/C23. The following functions are provided by tcc-win's runtime
+library (`libtcc1.a`, source `lib/c23rt.c`) and declared in the shipped
+headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
+`timespec_get` and `TIME_UTC`). Tested by `tests/c23/c23_runtime.c`.
+
+| Function(s) | Header | Notes |
+|---|---|---|
+| `memset_explicit`, `strndup` | `<string.h>` | `strdup` comes from msvcrt |
+| `memalignment` | `<stdlib.h>` | |
+| `strfromd`, `strfromf`, `strfroml` | `<stdlib.h>` | formatted by msvcrt; infinities and NaNs are written as `inf`/`nan` (`INF`/`NAN`); `%a`/`%A` output is msvcrt's |
+| `gmtime_r`, `localtime_r`, `timegm` | `<time.h>` | via `_gmtime64_s`, `_localtime64_s`, `_mkgmtime64`; `time_t` is 32 bits on i386 |
+| `timespec_get` with `TIME_UTC` (C11), `timespec_getres` (C23) | `<time.h>` | `GetSystemTimePreciseAsFileTime` (Windows 8+), else `GetSystemTimeAsFileTime`; resolution reported as 100 ns |
+| `roundeven`, `nextup`, `nextdown` | `<math.h>` | with `f` and `l` variants |
+| `fmaximum`, `fminimum`, `fmaximum_num`, `fminimum_num`, `fmaximum_mag`, `fminimum_mag`, `fmaximum_mag_num`, `fminimum_mag_num` | `<math.h>` | with `f` and `l` variants; `long double` is `double` on these targets |
+
+The `__STDC_VERSION_*_H__` macros are still not defined, since the headers
+remain incomplete.
+
+## Library: gaps
+
+These are not declared and not available:
 
 | Function(s) | Standard |
 |---|---|
-| `memset_explicit` | C23 |
-| `memalignment` | C23 |
-| `strndup` (`strdup` is available) | C23 |
-| `free_sized`, `free_aligned_sized` | C23 |
+| `free_sized`, `free_aligned_sized` | C23; not provided together with `aligned_alloc` (below) |
 | `aligned_alloc` | C11; memory from msvcrt's `_aligned_malloc` cannot be released with `free`, so a compatible version needs its own allocator |
-| `gmtime_r`, `localtime_r`, `timegm` | C23 (msvcrt has `_gmtime64_s`, `_localtime64_s`, `_mkgmtime64`) |
-| `strfromd`, `strfromf`, `strfroml` | C23 |
-| `timespec_get` with `TIME_UTC` (C11), `timespec_getres` (C23) | |
-| `nextup`, `nextdown`, `roundeven`, `fmaximum` and the other new `<math.h>` functions | C23 |
+| other new `<math.h>` functions (`compoundn`, `rootn`, `pown`, `sinpi`, ...) | C23 |
 | `%b` in the `printf` family | C23; compiles, but msvcrt's `printf` does not implement it (not verified at run time) |
-
-Most of these can be added as small functions in tcc-win's runtime library
-(`libtcc1.a`) and declared in the shipped headers.
