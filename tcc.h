@@ -517,7 +517,8 @@ struct SymAttr {
     unsigned short
     borrow      : 2, /* 1 [[borrow]], 2 [[borrow_mut]] (borrow checked) */
     cexpr_agg   : 1, /* C23 constexpr struct/union/array object */
-    xxxx        : 13; /* not used */
+    own_fields  : 1, /* struct/union: has [[owner]] members */
+    xxxx        : 12; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */
