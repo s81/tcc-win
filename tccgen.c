@@ -331,10 +331,17 @@ ST_FUNC int ieee_finite(double d)
     return ((unsigned)((p[1] | 0x800fffff) + 1)) >> 31;
 }
 
+/* the last member of a constexpr object folded to a constant (see
+   cexpr_fold), and its lvalue before, for '&' */
+static SValue cexpr_orig, *cexpr_vt;
+
 ST_FUNC void test_lvalue(void)
 {
-    if (!(vtop->r & VT_LVAL))
+    if (!(vtop->r & VT_LVAL)) {
+        if (cexpr_vt == vtop && vtop->r == VT_CONST)
+            tcc_error("cannot modify a member of a constexpr object");
         expect("lvalue");
+    }
 }
 
 ST_FUNC void check_vstack(void)
@@ -6774,6 +6781,64 @@ static void parse_atomic(int atok)
     }
 }
 
+/* C23: a member or element of a constexpr struct/union/array object is a
+   constant expression. Such objects are static and read-only, and their
+   initializer is already in the section data when they are used, so an
+   arithmetic value at a constant offset is read from there. */
+
+static void cexpr_fold(void)
+{
+    Sym *s = vtop->sym;
+    ElfSym *esym;
+    Section *sec;
+    unsigned char buf[8];
+    unsigned long long off;
+    int bt = vtop->type.t & VT_BTYPE, sz, al;
+
+    if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) != (VT_CONST | VT_LVAL | VT_SYM)
+        || !s || !s->a.cexpr_agg
+        || (vtop->type.t & (VT_ARRAY | VT_VLA | VT_BITFIELD))
+        || !(is_integer_btype(bt) || bt == VT_BOOL || is_float(bt)))
+        return;
+    esym = elfsym(s);
+    if (!esym || esym->st_shndx == SHN_UNDEF || esym->st_shndx >= SHN_LORESERVE)
+        return;
+    sec = tcc_state->sections[esym->st_shndx];
+    sz = type_size(&vtop->type, &al);
+    off = esym->st_value + vtop->c.i;
+    if (sz <= 0 || sz > 8 || vtop->c.i < 0 || off + sz > sec->data_offset)
+        return;
+    if (sec->sh_type == SHT_NOBITS)
+        memset(buf, 0, sz);
+    else
+        memcpy(buf, sec->data + off, sz);
+    cexpr_orig = *vtop;
+    cexpr_vt = vtop;
+    vtop->r = VT_CONST;
+    vtop->sym = NULL;
+    memset(&vtop->c, 0, sizeof vtop->c);
+    if (bt == VT_FLOAT) {
+        float f; memcpy(&f, buf, 4); vtop->c.f = f;
+    } else if (bt == VT_DOUBLE || (bt == VT_LDOUBLE && sz == 8)) {
+        double d; memcpy(&d, buf, 8);
+        if (bt == VT_DOUBLE)
+            vtop->c.d = d;
+        else
+            vtop->c.ld = d;
+    } else if (bt == VT_LDOUBLE) {
+        *vtop = cexpr_orig, cexpr_vt = NULL; /* not a host format */
+    } else {
+        unsigned long long u = 0;
+        int i;
+        for (i = sz; i-- > 0;) /* little endian */
+            u = u << 8 | buf[i];
+        if (sz < 8 && !(vtop->type.t & VT_UNSIGNED) && bt != VT_BOOL
+            && (u >> (sz * 8 - 1) & 1))
+            u |= ~0ULL << sz * 8; /* sign extend */
+        vtop->c.i = u;
+    }
+}
+
 ST_FUNC void unary(void)
 {
     int n, t, align, size, r;
@@ -6973,8 +7038,13 @@ ST_FUNC void unary(void)
     case '&':
         next();
         own_addrof = tok >= TOK_UIDENT;
+        cexpr_vt = NULL;
         unary();
         own_addrof = 0;
+        if (cexpr_vt == vtop && vtop->r == VT_CONST
+            && vtop->type.t == cexpr_orig.type.t)
+            *vtop = cexpr_orig; /* '&' needs the object, not its value */
+        cexpr_vt = NULL;
         /* functions names must be treated as function pointers,
            except for unary '&' and sizeof. Since we consider that
            functions are not lvalues, we only have to handle it
@@ -7646,6 +7716,7 @@ special_math_val:
             break;
         }
     }
+    cexpr_fold();
 }
 
 #ifndef precedence_parser /* original top-down parser */
@@ -10151,7 +10222,7 @@ static void pe_check_linkage(CType *type, AttributeDef *ad)
    or VT_JMP if parsing c99 for decl: for (int i = 0, ...) */
 static int decl(int l)
 {
-    int v, has_init, r, oldint, c23;
+    int v, has_init, r, oldint, c23, cexpr_agg;
     CType type, btype;
     Sym *sym, *sa;
     AttributeDef ad, adbase;
@@ -10212,6 +10283,7 @@ static int decl(int l)
         while (1) { /* iterate thru each declaration */
             type = btype;
 	    ad = adbase;
+            cexpr_agg = 0;
             ++own_stmt;
             type_decl(&type, &ad, &v, l == VT_CMP ? TYPE_DIRECT | TYPE_PARAM : TYPE_DIRECT);
             /*ptype("decl", &type, v);*/
@@ -10442,6 +10514,16 @@ static int decl(int l)
                         type.t |= VT_EXTERN;
                         external_sym(v, &type, r, &ad);
                     } else {
+                        if ((c23 & 1) && ((type.t & VT_ARRAY)
+                                || (type.t & VT_BTYPE) == VT_STRUCT)) {
+                            /* C23 constexpr struct/union/array: a static
+                               read-only object whose members are constants */
+                            if (!has_init)
+                                tcc_error("constexpr object '%s' must be initialized",
+                                    get_tok_str(v, NULL));
+                            type.t |= VT_STATIC;
+                            cexpr_agg = 1;
+                        }
                         if (l == VT_CONST || (type.t & VT_STATIC))
                             r |= VT_CONST;
                         else
@@ -10470,6 +10552,8 @@ static int decl(int l)
                                 own_borrow_init(&own_vars[own_n - 1], mv);
                         } else
                         decl_initializer_alloc(&type, &ad, r, has_init, v, l);
+                        if (cexpr_agg && (sym = sym_find(v)))
+                            sym->a.cexpr_agg = 1; /* its initializer is written now */
                         if (auto_str) {
                             end_macro();
                             next();

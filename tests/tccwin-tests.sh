@@ -28,6 +28,7 @@ check_ok() { # dir file
 check_ok "$top/tests/c23" c23_features.c
 check_ok "$top/tests/c23" c23_more.c
 check_ok "$top/tests/c23" c23_bitint.c
+check_ok "$top/tests/c23" c23_constexpr.c
 for f in "$top"/tests/ownership/ok_*.c; do
     check_ok "$top/tests/ownership" "$(basename "$f")"
 done

@@ -80,13 +80,16 @@ make cross-x86_64-win32 cross-i386-win32 cross-arm64-win32
 
 Use `-std=c11` or `-std=c99` to get the previous behaviour.
 
+[docs/C23-STATUS.md](docs/C23-STATUS.md) lists what an audit against C23
+found supported and what is still missing.
+
 | Feature | Status |
 |---|---|
 | `__STDC_VERSION__ 202311L`, `-std=c23/c2x/gnu23` | added (default) |
 | `bool`, `true`, `false`, `static_assert`, `alignas`, `alignof`, `thread_local` without headers | added (predefined macros, as permitted by C23 6.4.1) |
 | `static_assert` without message | upstream |
 | `nullptr`, `nullptr_t` | added (`nullptr_t` is a distinct type) |
-| `constexpr` | added: integer and floating objects are true constants (no address); other types are treated as `const` |
+| `constexpr` | added: integer and floating objects are true constants (no address); members and elements of `constexpr` structs, unions and arrays are constant expressions (the object is static and read-only) |
 | `auto` type inference | added (single plain declarator: `auto x = expr;`) |
 | `typeof`, `typeof_unqual` | upstream / added |
 | `_BitInt(N)`, `wb`/`uwb` constants | added for N <= 64 (`BITINT_MAXWIDTH` is 64, the minimum C23 requires) |
