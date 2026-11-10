@@ -90,6 +90,8 @@
     # define __TCC_C_ATTR_unsequenced 202207L
     # define __TCC_C_ATTR_reproducible 202207L
     # define __TCC_C_ATTR_owner 202311L
+    # define __TCC_C_ATTR_borrow 202311L
+    # define __TCC_C_ATTR_borrow_mut 202311L
     # define __TCC_OWNERSHIP__ 1
     # define __BITINT_MAXWIDTH__ 64
     #endif
