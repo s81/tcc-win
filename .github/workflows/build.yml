@@ -75,6 +75,8 @@ jobs:
     - name: upstream test suite (clang as reference compiler)
       shell: cmd
       run: |
+        rem test-win32.bat -c clang creates msvcrt.lib with MSVC's 'lib'
+        for /f "delims=" %%i in ('vswhere.exe -latest -property installationPath') do call "%%i\VC\Auxiliary\Build\vcvarsall.bat" arm64
         cd tests
         call test-win32.bat -c clang all -k
 
