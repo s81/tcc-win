@@ -549,7 +549,11 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
         break;
     case TOK_LCHAR:
         cstr_ccat(&cstr_buf, 'L');
+        goto add_cchar;
+    case TOK_CU8CHAR:
+        cstr_cat(&cstr_buf, "u8", 2);
     case TOK_CCHAR:
+    add_cchar:
         cstr_ccat(&cstr_buf, '\'');
         add_char(&cstr_buf, cv->i);
         cstr_ccat(&cstr_buf, '\'');
@@ -975,6 +979,7 @@ static inline int tok_size(const int *p)
     case TOK_CUINT:
     case TOK_CCHAR:
     case TOK_LCHAR:
+    case TOK_CU8CHAR:
     case TOK_CFLOAT:
     case TOK_LINENUM:
         return 1 + 1;
@@ -1098,6 +1103,7 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
     case TOK_CUINT:
     case TOK_CCHAR:
     case TOK_LCHAR:
+    case TOK_CU8CHAR:
     case TOK_CFLOAT:
     case TOK_LINENUM:
 #if LONG_SIZE == 4
@@ -1183,6 +1189,7 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
     case TOK_CINT:
     case TOK_CCHAR:
     case TOK_LCHAR:
+    case TOK_CU8CHAR:
     case TOK_LINENUM:
         cv->i = *p++;
         break;
@@ -1344,11 +1351,33 @@ static int pp_embed(TCCState *s1, int test)
     CString pfx, sfx, emp, *cs;
 
     c = skip_spaces();
-    if (c != '<' && c != '\"')
-        tcc_error("'#embed' expects \"FILENAME\" or <FILENAME>");
-    cstr_reset(&tokcstr);
-    file->buf_ptr = parse_pp_string(file->buf_ptr, c == '<' ? '>' : c, &tokcstr);
-    pstrncpy(name, sizeof name, tokcstr.data, tokcstr.size);
+    if (c == '<' || c == '\"') {
+        cstr_reset(&tokcstr);
+        file->buf_ptr = parse_pp_string(file->buf_ptr, c == '<' ? '>' : c, &tokcstr);
+        pstrncpy(name, sizeof name, tokcstr.data, tokcstr.size);
+    } else {
+        /* computed name, as for #include: macros are expanded and the
+           tokens joined until they form "name" or <name> */
+        int saved_flags = parse_flags;
+        char *q;
+        parse_flags = PARSE_FLAG_PREPROCESS | PARSE_FLAG_LINEFEED
+                    | (parse_flags & PARSE_FLAG_ASM_FILE);
+        name[0] = 0;
+        for (;;) {
+            next();
+            if (tok == TOK_LINEFEED || tok == TOK_EOF || (test && tok == ')'))
+                tcc_error("'#embed' expects \"FILENAME\" or <FILENAME>");
+            pstrcat(name, sizeof name, get_tok_str(tok, &tokc));
+            /* stop at the last token of the name: the parameters follow */
+            q = name, i = strlen(q) - 1;
+            if (i > 0 && ((q[0] == '"' && q[i] == '"')
+                       || (q[0] == '<' && q[i] == '>')))
+                break;
+        }
+        c = q[0]; /* '"' or '<': where to search, as for #include */
+        memmove(q, q + 1, i - 1), q[i - 1] = 0; /* remove the quotes */
+        parse_flags = saved_flags;
+    }
     cstr_new(&pfx), cstr_new(&sfx), cstr_new(&emp);
     /* embed parameters: limit(n) prefix(...) suffix(...) if_empty(...) */
     for (next();; ) {
@@ -2334,10 +2363,12 @@ static void parse_escape_string(CString *outstr, const uint8_t *buf, int is_long
 static void parse_string(const char *s, int len)
 {
     uint8_t buf[1000], *p = buf;
-    int is_long, sep;
+    int is_long, sep, is_u8 = 0;
 
     if ((is_long = *s == 'L'))
         ++s, --len;
+    else if (s[0] == 'u' && s[1] == '8')
+        is_u8 = 1, s += 2, len -= 2; /* u8'c' (C23), u8"s" */
     sep = *s++;
     len -= 2;
     if (len >= sizeof buf)
@@ -2367,6 +2398,12 @@ static void parse_string(const char *s, int len)
                 c = ((nwchar_t *)tokcstr.data)[i];
             else
                 c = (c << 8) | ((char *)tokcstr.data)[i];
+        }
+        if (is_u8) {
+            /* C23: one UTF-8 code unit, of type unsigned char */
+            if (n != 1)
+                tcc_error("u8 character constant must be a single code unit");
+            tok = TOK_CU8CHAR, c &= 0xff;
         }
         tokc.i = c;
     } else {
@@ -2890,7 +2927,7 @@ maybe_newline:
             && !(parse_flags & PARSE_FLAG_ASM_FILE)) {
             /* C23 u8 character constant, C11 u8 string literal */
             c = p[2], p += 2;
-            is_long = 0;
+            is_long = 2; /* keep the prefix in the token text */
             goto str_const;
         }
         goto parse_ident_fast;
@@ -2970,7 +3007,9 @@ maybe_newline:
         is_long = 0;
     str_const:
         cstr_reset(&tokcstr);
-        if (is_long)
+        if (is_long == 2)
+            cstr_cat(&tokcstr, "u8", 2);
+        else if (is_long)
             cstr_ccat(&tokcstr, 'L');
         cstr_ccat(&tokcstr, c);
         p = parse_pp_string(p, c, &tokcstr);

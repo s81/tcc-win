@@ -13,8 +13,8 @@ tmp=${TMPDIR:-/tmp}/tccwin-tests.$$
 mkdir -p "$tmp"
 fail=0
 
-check_ok() { # dir file
-    if out=$(cd "$1" && $TCC "$2" -o "$tmp/t.exe" 2>&1) && [ -z "$out" ]; then
+check_ok() { # dir file [flags]
+    if out=$(cd "$1" && $TCC $3 "$2" -o "$tmp/t.exe" 2>&1) && [ -z "$out" ]; then
         if [ -n "$RUN" ] && ! "$tmp/t.exe" >"$tmp/out.txt" 2>&1; then
             echo "FAIL (run) $2"; cat "$tmp/out.txt"; fail=1
         else
@@ -29,6 +29,7 @@ check_ok "$top/tests/c23" c23_features.c
 check_ok "$top/tests/c23" c23_more.c
 check_ok "$top/tests/c23" c23_bitint.c
 check_ok "$top/tests/c23" c23_constexpr.c
+check_ok "$top/tests/c23" c23_audit_fixes.c -Wall
 for f in "$top"/tests/ownership/ok_*.c; do
     check_ok "$top/tests/ownership" "$(basename "$f")"
 done

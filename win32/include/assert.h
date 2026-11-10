@@ -11,9 +11,17 @@
 #include <stdlib.h>
 #endif
 
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_ASSERT_H__ 202311L
+#endif
+
 #ifdef NDEBUG
 #ifndef assert
+#if __STDC_VERSION__ >= 202311L
+#define assert(...) ((void)0) /* C23: variadic, so commas are allowed */
+#else
 #define assert(_Expression) ((void)0)
+#endif
 #endif
 #else
 
@@ -49,7 +57,13 @@ extern void __cdecl _assert(const char *, const char *, unsigned);
 
 #ifndef assert
 //#define assert(_Expression) (void)((!!(_Expression)) || (_wassert(_CRT_WIDE(#_Expression),_CRT_WIDE(__FILE__),__LINE__),0))
+#if __STDC_VERSION__ >= 202311L
+/* C23: variadic, so that e.g. assert((struct P){1, 2}.x) works */
+#define assert(...) ((__VA_ARGS__) ? (void)0 \
+    : _assert(#__VA_ARGS__, __FILE__, __LINE__))
+#else
 #define assert(e) ((e) ? (void)0 : _assert(#e, __FILE__, __LINE__))
+#endif
 #endif
 
 #endif

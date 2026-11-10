@@ -197,6 +197,7 @@ static void asm_expr_unary(TCCState *s1, ExprValue *pe)
         break;
     case TOK_CCHAR:
     case TOK_LCHAR:
+    case TOK_CU8CHAR:
 	pe->v = tokc.i;
 	pe->sym = NULL;
 	pe->pcrel = 0;

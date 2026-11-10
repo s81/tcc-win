@@ -7,3 +7,6 @@ err_asm_goto.c 'asm goto' is not supported by tcc-win (use -fgoto for legacy cod
 err_constexpr_noinit.c constexpr object 'p' must be initialized
 err_constexpr_nonconst.c initializer element is not constant
 err_constexpr_assign.c cannot modify a member of a constexpr object
+err_tag_redef.c redefinition of 'T' with different content
+err_enum_redef.c redefinition of 'E' with different content
+err_u8_multi.c u8 character constant must be a single code unit
