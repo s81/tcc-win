@@ -41,6 +41,15 @@ for dir in c23 ownership; do
     done < "$top/tests/$dir/expect.txt"
 done
 
+# all ownership errors of a file are reported in one run, one per variable
+out=$(cd "$top/tests/ownership" && $TCC -c err_multi.c -o "$tmp/t.o" 2>&1)
+n=$(printf '%s\n' "$out" | grep -c "error:")
+if [ "$n" = 4 ]; then
+    echo "ok   err_multi.c (4 errors in one run)"
+else
+    echo "FAIL err_multi.c: expected 4 errors, got $n: $out"; fail=1
+fi
+
 rm -rf "$tmp"
 [ $fail = 0 ] && echo "all tcc-win tests passed"
 exit $fail

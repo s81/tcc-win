@@ -4154,6 +4154,7 @@ struct own_var {
     int live_end;  /* extended to the end of loops that use it */
     int pin;       /* id of the loop the variable is used in, 0 if none */
     int decl_cond; /* own_cond at the declaration */
+    unsigned char reported; /* an error about it was reported */
 };
 
 /* A conflict with a borrow (e.g. moving the owner it borrows from) is an
@@ -4225,14 +4226,34 @@ static struct own_var *own_find(Sym *s)
     return NULL;
 }
 
+/* Report an ownership error and go on compiling, so that one run shows
+   all of them; the compilation still fails.  At most one error is
+   reported per variable 'o' (if given): later errors about it are
+   usually consequences of the first one. */
+static void own_err(struct own_var *o, const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+
+    if (o) {
+        if (o->reported)
+            return;
+        o->reported = 1;
+    }
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    tcc_error_noabort("%s", buf);
+}
+
 static void own_report(struct own_conflict *c)
 {
-    char msg[sizeof c->msg];
-    strcpy(msg, c->msg);
-    own_nconflicts = 0;
+    int line = file ? file->line_num : 0;
     if (file)
         file->line_num = c->line; /* report at the conflicting statement */
-    tcc_error("%s", msg);
+    own_err(NULL, "%s", c->msg);
+    if (file)
+        file->line_num = line;
 }
 
 /* record that 'b' must not be used after this point */
@@ -4251,6 +4272,7 @@ static void own_conflict(struct own_var *b, const char *fmt, ...)
         va_end(ap);
         tmp.line = file ? file->line_num : 0;
         own_report(&tmp);
+        return;
     }
     c = &own_conflicts[own_nconflicts++];
     c->var = b - own_vars;
@@ -4334,15 +4356,19 @@ static void own_declare(Sym *s, int st)
     if (!s || !(s->a.owner || s->a.borrow) || nocode_wanted)
         return;
     name = get_tok_str(s->v, NULL);
-    if (s->a.owner && s->a.borrow)
-        tcc_error("'%s' cannot be both [[owner]] and [[borrow]]", name);
+    if (s->a.owner && s->a.borrow) {
+        own_err(NULL, "'%s' cannot be both [[owner]] and [[borrow]]", name);
+        return;
+    }
     kind = s->a.owner ? OWN_OWNER : s->a.borrow;
-    if ((s->type.t & (VT_BTYPE|VT_ARRAY)) != VT_PTR)
-        tcc_error("[[%s]] requires a pointer type ('%s')",
+    if ((s->type.t & (VT_BTYPE|VT_ARRAY)) != VT_PTR) {
+        own_err(NULL, "[[%s]] requires a pointer type ('%s')",
             kind == OWN_OWNER ? "owner" : kind == OWN_MUT ? "borrow_mut" : "borrow",
             name);
+        return; /* not tracked */
+    }
     if (kind == OWN_SHARED && !(pointed_type(&s->type)->t & VT_CONSTANT))
-        tcc_error("[[borrow]] requires a pointer to const ('%s');"
+        own_err(NULL, "[[borrow]] requires a pointer to const ('%s');"
             " use [[borrow_mut]] for write access", name);
     if ((s->r & VT_VALMASK) != VT_LOCAL) /* statics are not tracked */
         return;
@@ -4359,6 +4385,7 @@ static void own_declare(Sym *s, int st)
     o->decl_cond = own_cond;
     o->last_use = o->last_stmt = -1;
     o->live_end = o->pin = 0;
+    o->reported = 0;
 }
 
 /* record a conflict with every live borrow other than 'skip' of a
@@ -4399,7 +4426,7 @@ static void own_use(Sym *s)
                 own_read(o); /* may not run: the old value may live on */
         }
         if (o->kind == OWN_OWNER && (o->st == OWN_OWNED || o->st == OWN_MAYBE))
-            tcc_error("assignment overwrites owner '%s' which %s owns a resource (leak)",
+            own_err(o, "assignment overwrites owner '%s' which %s owns a resource (leak)",
                 name, o->st == OWN_OWNED ? "still" : "possibly still");
         own_pending = o;
         return;
@@ -4414,12 +4441,14 @@ static void own_use(Sym *s)
     }
     if (o->st == OWN_MOVED) {
         if (o->kind == OWN_OWNER)
-            tcc_error("use of owner '%s' after move (or before initialization)", name);
-        tcc_error("use of borrow '%s' before initialization", name);
+            own_err(o, "use of owner '%s' after move (or before initialization)", name);
+        else
+            own_err(o, "use of borrow '%s' before initialization", name);
     } else if (o->st == OWN_MAYBE) {
         if (o->kind == OWN_OWNER)
-            tcc_error("use of owner '%s' which was moved on some paths", name);
-        tcc_error("use of borrow '%s' which is not initialized on all paths", name);
+            own_err(o, "use of owner '%s' which was moved on some paths", name);
+        else
+            own_err(o, "use of borrow '%s' which is not initialized on all paths", name);
     }
     own_read(o);
     if (o == own_lending) {
@@ -4615,14 +4644,16 @@ static void own_move(struct own_var *o)
 
     if (!o || nocode_wanted)
         return;
-    if (o->kind != OWN_OWNER)
-        tcc_error("cannot move out of borrow '%s'", own_name(o));
+    if (o->kind != OWN_OWNER) {
+        own_err(o, "cannot move out of borrow '%s'", own_name(o));
+        return;
+    }
     own_conflicts_with(own_bit(o), 0, NULL,
         "cannot move owner '%s' while it is borrowed by '%s'", own_name(o));
     for (c = own_cur_call; c; c = c->prev)
         for (i = 0; i < c->n; ++i)
             if (c->m[i] & own_bit(o))
-                tcc_error("cannot move owner '%s' while it is borrowed"
+                own_err(o, "cannot move owner '%s' while it is borrowed"
                     " by an argument of the same call", own_name(o));
     o->st = OWN_MOVED;
 }
@@ -4637,7 +4668,7 @@ static void own_borrow_init(struct own_var *b, struct own_var *src)
     if (!src)
         return;
     if (b->kind == OWN_MUT && src->kind == OWN_SHARED)
-        tcc_error("cannot borrow '%s' as mutable: it is a shared borrow",
+        own_err(src, "cannot borrow '%s' as mutable: it is a shared borrow",
             own_name(src));
     for (c = own_vars; c < own_vars + own_n; ++c)
         if (c != b && c->kind != OWN_OWNER && (c->of & own_bit(src))
@@ -4677,7 +4708,7 @@ static void own_return(struct own_var *o)
        owner (owners are always local, including [[owner]] parameters) */
     for (i = 0; i < own_n; ++i)
         if ((o->of >> i & 1) && own_vars[i].kind == OWN_OWNER)
-            tcc_error("cannot return borrow '%s' of local owner '%s'",
+            own_err(o, "cannot return borrow '%s' of local owner '%s'",
                 own_name(o), own_name(&own_vars[i]));
 }
 
@@ -4692,7 +4723,7 @@ static void own_call_borrow(struct own_var *src, int kind)
     if (!src || !c || nocode_wanted)
         return;
     if (kind == OWN_MUT && src->kind == OWN_SHARED)
-        tcc_error("cannot pass shared borrow '%s' as mutable borrow", own_name(src));
+        own_err(src, "cannot pass shared borrow '%s' as mutable borrow", own_name(src));
     if (kind == OWN_MUT)
         own_conflicts_with(own_bit(src), 0, NULL,
             "cannot pass '%s' as mutable borrow while it is borrowed by '%s'",
@@ -4700,7 +4731,7 @@ static void own_call_borrow(struct own_var *src, int kind)
     m = own_bit(src) | src->of;
     for (i = 0; i < c->n; ++i)
         if ((c->m[i] & m) && (kind == OWN_MUT || c->k[i] == OWN_MUT))
-            tcc_error("'%s' and '%s' are passed to the same call and one of"
+            own_err(src, "'%s' and '%s' are passed to the same call and one of"
                 " them is a mutable borrow (aliasing)",
                 own_name(c->v[i]), own_name(src));
     if (c->n < 16) {
@@ -4729,7 +4760,7 @@ static void own_check_leaks(int from, const char *where)
     for (i = from; i < own_n; ++i) {
         int st = own_vars[i].st;
         if (own_vars[i].kind == OWN_OWNER && (st == OWN_OWNED || st == OWN_MAYBE))
-            tcc_error("owner '%s' %s owns a resource at %s (leak): release or move it",
+            own_err(&own_vars[i], "owner '%s' %s owns a resource at %s (leak): release or move it",
                 own_name(&own_vars[i]),
                 st == OWN_OWNED ? "still" : "possibly still", where);
     }
@@ -4835,7 +4866,7 @@ static void own_loop_end(struct own_snap *pre, struct own_snap *acc,
         for (i = 0; i < pre->n && i < own_n; ++i)
             if (own_vars[i].kind == OWN_OWNER && pre->st[i] == OWN_OWNED
                 && (own_vars[i].st == OWN_MOVED || own_vars[i].st == OWN_MAYBE))
-                tcc_error("owner '%s' is moved inside a loop (it would be"
+                own_err(&own_vars[i], "owner '%s' is moved inside a loop (it would be"
                     " used again in the next iteration)",
                     own_name(&own_vars[i]));
     own_narrow(exit_null); /* the condition is false after an iteration */

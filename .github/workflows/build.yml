@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: build Windows cross compilers
       run: ./configure && make cross-x86_64-win32 cross-i386-win32 cross-arm64-win32
     - name: C23 + ownership tests (compile and link)
@@ -22,7 +22,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: build (x86_64-win32)
       shell: cmd
       run: |
@@ -42,7 +42,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: build (i386-win32)
       shell: cmd
       run: |
@@ -62,7 +62,7 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: build (arm64-win32)
       shell: cmd
       run: |
@@ -103,7 +103,7 @@ jobs:
     env:
       T: ${{ matrix.target }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: stage 1 (built by MSVC)
       shell: cmd
       run: |
