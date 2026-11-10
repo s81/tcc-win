@@ -475,6 +475,29 @@ double pown(double x, long long n)
             return ll_odd(n) ? x : d_inf();
         return ll_odd(n) ? d_copysign(0.0, x) : 0.0;
     }
+    {
+        /* x = +-2^e exactly: the result is +-2^(n*e), built from its bits
+           with round-to-nearest-even, since msvcrt's pow() is not exact
+           for subnormal results (e.g. pown(2, -1075) must be 0) */
+        uint64_t u = d2u(x);
+        int be = (int)(u >> 52 & 0x7ff);
+        if ((u & 0xfffffffffffffull) == 0 && be != 0) {
+            long long k, e = be - 1023;
+            uint64_t sign = ll_odd(n) ? (u & 0x8000000000000000ull) : 0;
+            if (e == 0)
+                return u2d(sign | 0x3ff0000000000000ull); /* +-1 */
+            /* n*e without overflow: |n*e| > 2000 is out of range anyway */
+            k = (n > 4000 || n < -4000) ? (((n > 0) == (e > 0)) ? 4000 : -4000)
+                                        : n * e;
+            if (k > 1023)
+                return u2d(sign | 0x7ff0000000000000ull);       /* inf */
+            if (k >= -1022)
+                return u2d(sign | (uint64_t)(k + 1023) << 52);
+            if (k >= -1074)
+                return u2d(sign | 1ull << (k + 1074));         /* subnormal */
+            return u2d(sign);              /* 2^-1075 ties to even: 0 */
+        }
+    }
     if (dd_pown(x, 0.0, n, &r))
         return r;
     return pow(x, (double)n);           /* near overflow or underflow */
