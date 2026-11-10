@@ -51,6 +51,8 @@ win32/include/tcclib.h
 win32/include/tccdefs.h
 win32/include/stdatomic.h
 win32/include/tgmath.h
+win32/include/stdbit.h
+win32/include/stdckdint.h
 
 tests/tcctest[1234]
 tests/tcctest.gcc
