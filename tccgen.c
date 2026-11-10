@@ -4147,7 +4147,37 @@ struct own_var {
     int v;
     unsigned char st, kind;
     own_mask of; /* borrows: the tracked variables borrowed from */
+    /* non-lexical lifetime of a borrow (token positions, see tok_count) */
+    int decl_pos;  /* where the variable was declared */
+    int last_use;  /* last read of the variable, -1 if none */
+    int last_stmt; /* statement of the last read */
+    int live_end;  /* extended to the end of loops that use it */
+    int pin;       /* id of the loop the variable is used in, 0 if none */
+    int decl_cond; /* own_cond at the declaration */
 };
+
+/* A conflict with a borrow (e.g. moving the owner it borrows from) is an
+   error only if the borrow is used again later (non-lexical lifetimes).
+   Single-pass parsing cannot see later uses, so the conflict is recorded
+   and decided when the live range of the borrow is known: when the
+   variable goes out of scope or is assigned a new value. */
+struct own_conflict {
+    int var, pos, stmt, line;
+    char msg[200];
+};
+#define OWN_CONFLICT_MAX 128
+static struct own_conflict own_conflicts[OWN_CONFLICT_MAX];
+static int own_nconflicts;
+static int own_stmt; /* id of the statement being parsed */
+/* nesting of code that may not run: if/else branches, switch, loop bodies,
+   right operands of && || and ?: */
+static int own_cond;
+
+/* loops being parsed: a borrow that is used in a loop and was declared
+   before it is live until the end of the loop */
+#define OWN_LOOP_MAX 32
+static struct { int id, start; } own_loops[OWN_LOOP_MAX];
+static int own_nloops, own_loop_ids;
 struct own_snap {
     int n, live;
     unsigned char st[OWN_MAX];
@@ -4194,20 +4224,104 @@ static struct own_var *own_find(Sym *s)
     return NULL;
 }
 
-/* a live borrow other than 'skip' of a variable in 'mask'.
-   'kind' == OWN_MUT: only mutable borrows */
-static struct own_var *own_borrower(own_mask mask, int kind, struct own_var *skip)
+static void own_report(struct own_conflict *c)
+{
+    char msg[sizeof c->msg];
+    strcpy(msg, c->msg);
+    own_nconflicts = 0;
+    if (file)
+        file->line_num = c->line; /* report at the conflicting statement */
+    tcc_error("%s", msg);
+}
+
+/* record that 'b' must not be used after this point */
+static void own_conflict(struct own_var *b, const char *fmt, ...)
+{
+    struct own_conflict *c;
+    va_list ap;
+
+    if (nocode_wanted)
+        return;
+    if (own_nconflicts >= OWN_CONFLICT_MAX) {
+        /* no room: assume the borrow is still used (conservative) */
+        struct own_conflict tmp;
+        va_start(ap, fmt);
+        vsnprintf(tmp.msg, sizeof tmp.msg, fmt, ap);
+        va_end(ap);
+        tmp.line = file ? file->line_num : 0;
+        own_report(&tmp);
+    }
+    c = &own_conflicts[own_nconflicts++];
+    c->var = b - own_vars;
+    c->pos = tok_count;
+    c->stmt = own_stmt;
+    c->line = file ? file->line_num : 0;
+    va_start(ap, fmt);
+    vsnprintf(c->msg, sizeof c->msg, fmt, ap);
+    va_end(ap);
+}
+
+/* the live range of the current value of borrow 'b' is complete:
+   report the first recorded conflict that happened while it was live */
+static void own_resolve(struct own_var *b)
+{
+    int i, j, idx = b - own_vars, end = b->last_use;
+
+    if (b->live_end > end)
+        end = b->live_end;
+    for (i = j = 0; i < own_nconflicts; ++i) {
+        struct own_conflict *c = &own_conflicts[i];
+        if (c->var != idx) {
+            own_conflicts[j++] = *c;
+            continue;
+        }
+        if (c->pos < end || c->stmt == b->last_stmt)
+            own_report(c);
+    }
+    own_nconflicts = j;
+    b->last_use = b->last_stmt = -1;
+    b->live_end = b->pin = 0;
+}
+
+/* borrow 'b' is read here */
+static void own_read(struct own_var *b)
 {
     int i;
-    if (!mask)
-        return NULL;
-    for (i = 0; i < own_n; ++i) {
-        struct own_var *b = &own_vars[i];
-        if (b != skip && b->kind != OWN_OWNER && (b->of & mask)
-            && (kind != OWN_MUT || b->kind == OWN_MUT))
-            return b;
+    if (b->kind == OWN_OWNER)
+        return;
+    b->last_use = tok_count;
+    b->last_stmt = own_stmt;
+    /* used in a loop that started after its declaration: it is needed
+       again in the next iteration */
+    for (i = 0; i < own_nloops && i < OWN_LOOP_MAX; ++i)
+        if (own_loops[i].start > b->decl_pos) {
+            b->pin = own_loops[i].id;
+            break;
+        }
+}
+
+static void own_loop_enter(void)
+{
+    ++own_cond;
+    if (own_nloops < OWN_LOOP_MAX) {
+        own_loops[own_nloops].id = ++own_loop_ids;
+        own_loops[own_nloops].start = tok_count;
     }
-    return NULL;
+    ++own_nloops;
+}
+
+static void own_loop_exit(void)
+{
+    int i;
+    --own_cond;
+    if (--own_nloops >= OWN_LOOP_MAX)
+        return;
+    for (i = 0; i < own_n; ++i)
+        if (own_vars[i].pin == own_loops[own_nloops].id) {
+            own_vars[i].pin = 0;
+            if (own_vars[i].live_end < tok_count)
+                own_vars[i].live_end = tok_count;
+        }
 }
 
 static void own_declare(Sym *s, int st)
@@ -4240,12 +4354,33 @@ static void own_declare(Sym *s, int st)
     o->st = st;
     o->kind = kind;
     o->of = 0;
+    o->decl_pos = tok_count;
+    o->decl_cond = own_cond;
+    o->last_use = o->last_stmt = -1;
+    o->live_end = o->pin = 0;
+}
+
+/* record a conflict with every live borrow other than 'skip' of a
+   variable in 'mask' ('mut_only': only with mutable borrows).
+   'fmt' gets the name of the variable 'name' and of the borrow. */
+static void own_conflicts_with(own_mask mask, int mut_only, struct own_var *skip,
+                               const char *fmt, const char *name)
+{
+    int i;
+    if (!mask)
+        return;
+    for (i = 0; i < own_n; ++i) {
+        struct own_var *b = &own_vars[i];
+        if (b != skip && b->kind != OWN_OWNER && (b->of & mask)
+            && (!mut_only || b->kind == OWN_MUT))
+            own_conflict(b, fmt, name, own_name(b));
+    }
 }
 
 /* an identifier was parsed, 'tok' is the token that follows it */
 static void own_use(Sym *s)
 {
-    struct own_var *o, *b;
+    struct own_var *o;
     const char *name;
     int addrof = own_addrof;
 
@@ -4254,9 +4389,14 @@ static void own_use(Sym *s)
         return;
     name = own_name(o);
     if (tok == '=') {
-        if ((b = own_borrower(own_bit(o), 0, NULL)))
-            tcc_error("cannot assign to '%s' while it is borrowed by '%s'",
-                name, own_name(b));
+        own_conflicts_with(own_bit(o), 0, NULL,
+            "cannot assign to '%s' while it is borrowed by '%s'", name);
+        if (o->kind != OWN_OWNER) {
+            if (own_cond == o->decl_cond)
+                own_resolve(o); /* the old value of the borrow is dead */
+            else
+                own_read(o); /* may not run: the old value may live on */
+        }
         if (o->kind == OWN_OWNER && (o->st == OWN_OWNED || o->st == OWN_MAYBE))
             tcc_error("assignment overwrites owner '%s' which %s owns a resource (leak)",
                 name, o->st == OWN_OWNED ? "still" : "possibly still");
@@ -4265,9 +4405,9 @@ static void own_use(Sym *s)
     }
     if (addrof && tok != '[' && tok != TOK_ARROW && tok != '(') {
         /* '&p': may be (re)initialized via the pointer */
-        if ((b = own_borrower(own_bit(o), 0, NULL)))
-            tcc_error("cannot take the address of '%s' while it is borrowed by '%s'",
-                name, own_name(b));
+        own_conflicts_with(own_bit(o), 0, NULL,
+            "cannot take the address of '%s' while it is borrowed by '%s'", name);
+        own_read(o);
         o->st = OWN_OWNED;
         return;
     }
@@ -4280,13 +4420,13 @@ static void own_use(Sym *s)
             tcc_error("use of owner '%s' which was moved on some paths", name);
         tcc_error("use of borrow '%s' which is not initialized on all paths", name);
     }
+    own_read(o);
     if (o == own_lending) {
         own_lending = NULL;
         return;
     }
-    if ((b = own_borrower(own_bit(o), OWN_MUT, NULL)))
-        tcc_error("cannot use '%s' while it is mutably borrowed by '%s'",
-            name, own_name(b));
+    own_conflicts_with(own_bit(o), 1, NULL,
+        "cannot use '%s' while it is mutably borrowed by '%s'", name);
 }
 
 /* if the expression that follows is just the name of a tracked variable,
@@ -4349,7 +4489,6 @@ static void own_narrow(struct own_var *o)
 /* ownership of 'o' is moved away */
 static void own_move(struct own_var *o)
 {
-    struct own_var *b;
     struct own_call *c;
     int i;
 
@@ -4357,9 +4496,8 @@ static void own_move(struct own_var *o)
         return;
     if (o->kind != OWN_OWNER)
         tcc_error("cannot move out of borrow '%s'", own_name(o));
-    if ((b = own_borrower(own_bit(o), 0, NULL)))
-        tcc_error("cannot move owner '%s' while it is borrowed by '%s'",
-            own_name(o), own_name(b));
+    own_conflicts_with(own_bit(o), 0, NULL,
+        "cannot move owner '%s' while it is borrowed by '%s'", own_name(o));
     for (c = own_cur_call; c; c = c->prev)
         for (i = 0; i < c->n; ++i)
             if (c->m[i] & own_bit(o))
@@ -4380,10 +4518,12 @@ static void own_borrow_init(struct own_var *b, struct own_var *src)
     if (b->kind == OWN_MUT && src->kind == OWN_SHARED)
         tcc_error("cannot borrow '%s' as mutable: it is a shared borrow",
             own_name(src));
-    c = own_borrower(own_bit(src), b->kind == OWN_MUT ? 0 : OWN_MUT, b);
-    if (c)
-        tcc_error("cannot borrow '%s' as %s because it is also borrowed as %s by '%s'",
-            own_name(src), own_kind_str(b->kind), own_kind_str(c->kind), own_name(c));
+    for (c = own_vars; c < own_vars + own_n; ++c)
+        if (c != b && c->kind != OWN_OWNER && (c->of & own_bit(src))
+            && (b->kind == OWN_MUT || c->kind == OWN_MUT))
+            own_conflict(c, "cannot borrow '%s' as %s because it is also"
+                " borrowed as %s by '%s'", own_name(src),
+                own_kind_str(b->kind), own_kind_str(c->kind), own_name(c));
     b->of = own_bit(src) | src->of;
 }
 
@@ -4425,7 +4565,6 @@ static void own_return(struct own_var *o)
 static void own_call_borrow(struct own_var *src, int kind)
 {
     struct own_call *c = own_cur_call;
-    struct own_var *b;
     own_mask m;
     int i;
 
@@ -4433,9 +4572,10 @@ static void own_call_borrow(struct own_var *src, int kind)
         return;
     if (kind == OWN_MUT && src->kind == OWN_SHARED)
         tcc_error("cannot pass shared borrow '%s' as mutable borrow", own_name(src));
-    if (kind == OWN_MUT && (b = own_borrower(own_bit(src), 0, NULL)))
-        tcc_error("cannot pass '%s' as mutable borrow while it is borrowed by '%s'",
-            own_name(src), own_name(b));
+    if (kind == OWN_MUT)
+        own_conflicts_with(own_bit(src), 0, NULL,
+            "cannot pass '%s' as mutable borrow while it is borrowed by '%s'",
+            own_name(src));
     m = own_bit(src) | src->of;
     for (i = 0; i < c->n; ++i)
         if ((c->m[i] & m) && (kind == OWN_MUT || c->k[i] == OWN_MUT))
@@ -4480,12 +4620,18 @@ static void own_leave(int from)
     if (from >= own_n)
         return;
     own_check_leaks(from, "end of scope");
-    if (!nocode_wanted)
-        for (i = from; i < own_n; ++i)
+    for (i = from; i < own_n; ++i)
+        if (own_vars[i].kind != OWN_OWNER)
+            own_resolve(&own_vars[i]);
+    /* a borrow from an outer block must not be used after an owner
+       it borrows from went out of scope (a borrow of a borrow keeps
+       borrowing from the owner, so only owners matter here) */
+    for (i = from; i < own_n; ++i)
+        if (own_vars[i].kind == OWN_OWNER)
             for (j = 0; j < from; ++j)
                 if (own_vars[j].of & own_bit(&own_vars[i]))
-                    tcc_error("'%s' does not live long enough: it is still"
-                        " borrowed by '%s'", own_name(&own_vars[i]),
+                    own_conflict(&own_vars[j], "'%s' does not live long enough:"
+                        " it is still borrowed by '%s'", own_name(&own_vars[i]),
                         own_name(&own_vars[j]));
     for (j = 0; j < from; ++j)
         own_vars[j].of &= (1ULL << from) - 1;
@@ -7470,6 +7616,7 @@ static int condition_3way(void)
 static void expr_landor(int op)
 {
     int t = 0, cc = 1, f = 0, i = op == TOK_LAND, c;
+    ++own_cond; /* the right operands may not be evaluated */
     for(;;) {
         c = f ? i : condition_3way();
         if (c < 0)
@@ -7493,6 +7640,7 @@ static void expr_landor(int op)
     } else {
         gvtst_set(i, t);
     }
+    --own_cond;
 }
 
 static int is_cond_bool(SValue *sv)
@@ -7514,6 +7662,7 @@ static void expr_cond(void)
     expr_lor();
     if (tok == '?') {
         next();
+        ++own_cond;
 	c = condition_3way();
         g = (tok == ':' && gnu_ext);
         tt = 0;
@@ -7556,6 +7705,7 @@ static void expr_cond(void)
           nocode_wanted++;
         skip(':');
         expr_cond();
+        --own_cond;
 
         if ((vtop->type.t & VT_BTYPE) == VT_FUNC)
           mk_pointer(&vtop->type);
@@ -8098,6 +8248,7 @@ static void block(int flags)
     Sym *s;
 
 again:
+    ++own_stmt;
     while (tok == '[' && parse_c23_attribute(NULL))
         ; /* C23 attribute declaration/statement */
     t = tok;
@@ -8124,7 +8275,9 @@ again:
         own_acc_init(&acc);
         if (neg)
             own_narrow(nv); /* if (!p): p is null in the 'then' branch */
+        ++own_cond;
         block(0);
+        --own_cond;
         own_acc(&acc, !nocode_wanted);
         own_restore(&s0);
         if (!neg)
@@ -8133,7 +8286,9 @@ again:
             d = gjmp(0);
             gsym(a);
             next();
+            ++own_cond;
             block(0);
+            --own_cond;
             own_acc(&acc, !nocode_wanted);
             gsym(d); /* patch else jmp */
         } else {
@@ -8146,6 +8301,7 @@ again:
 
     } else if (t == TOK_WHILE) {
         new_scope_s(&o);
+        own_loop_enter();
         d = gind();
         skip('(');
         gexpr();
@@ -8153,6 +8309,7 @@ again:
         skip(')');
         b = 0;
         OWN_LOOP(lblock(&a, &b));
+        own_loop_exit();
         gjmp_addr(d);
         gsym_addr(b, d);
         gsym(a);
@@ -8256,6 +8413,7 @@ again:
             }
         }
         skip(';');
+        own_loop_enter(); /* after the init clause */
         a = b = 0;
         c = d = gind();
         if (tok != ';') {
@@ -8273,6 +8431,7 @@ again:
         }
         skip(')');
         OWN_LOOP(lblock(&a, &b));
+        own_loop_exit();
         gjmp_addr(d);
         gsym_addr(b, d);
         gsym(a);
@@ -8280,6 +8439,7 @@ again:
 
     } else if (t == TOK_DO) {
         new_scope_s(&o);
+        own_loop_enter();
         a = b = 0;
         d = gind();
         OWN_LOOP(lblock(&a, &b));
@@ -8290,6 +8450,7 @@ again:
         c = gvtst(0, 0);
         skip(')');
         skip(';');
+        own_loop_exit();
 	gsym_addr(c, d);
         gsym(a);
         prev_scope_s(&o);
@@ -8317,7 +8478,9 @@ again:
             own_save(&s0), own_acc_init(&acc);
             own_brk = &acc, own_sw = &s0;
         b = gjmp(0); /* jump to first case */
+        ++own_cond;
         lblock(&a, NULL);
+        --own_cond;
             own_brk = brk0, own_sw = sw0;
             own_acc(&acc, !nocode_wanted);
             if (!sw->def_sym) { /* no 'default': switch may be skipped */
@@ -9620,6 +9783,7 @@ static void gen_function(Sym *sym)
     tcc_debug_prolog_epilog(tcc_state, 0);
     func_vla_arg(sym);
     own_n = 0, own_brk = own_sw = NULL, own_pending = NULL, own_cur_call = NULL;
+    own_nconflicts = own_nloops = own_cond = 0;
     {
         Sym *pa;
         for (pa = sym->type.ref->next; pa; pa = pa->next)
@@ -9809,6 +9973,7 @@ static int decl(int l)
         while (1) { /* iterate thru each declaration */
             type = btype;
 	    ad = adbase;
+            ++own_stmt;
             type_decl(&type, &ad, &v, l == VT_CMP ? TYPE_DIRECT | TYPE_PARAM : TYPE_DIRECT);
             /*ptype("decl", &type, v);*/
             auto_str = NULL;

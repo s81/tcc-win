@@ -8,7 +8,8 @@ int main(void)
         [[borrow_mut]] char *m = p;
         [[borrow_mut]] char *m2 = m;
         m2[0] = 1;
-        m[1] = 2; /* error: m is mutably borrowed by m2 */
+        m[1] = 2; /* error: m2 is used again below */
+        m2[2] = 3;
     }
     free(p);
     return 0;

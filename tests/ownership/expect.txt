@@ -12,7 +12,7 @@ err_borrow_move.c cannot move owner 'p' while it is borrowed by 'v'
 err_borrow_mut_use.c cannot use 'p' while it is mutably borrowed by 'm'
 err_borrow_two_mut.c cannot borrow 'p' as mutable because it is also borrowed as mutable by 'm1'
 err_borrow_mut_shared.c cannot borrow 'p' as mutable because it is also borrowed as shared by 's'
-err_borrow_outlive.c 'w' does not live long enough: it is still borrowed by 'v'
+err_borrow_outlive.c 'q' does not live long enough: it is still borrowed by 'v'
 err_borrow_return.c cannot return borrow 'v' of local owner 'p'
 err_borrow_move_out.c cannot move out of borrow 's'
 err_borrow_alias.c 'p' and 'p' are passed to the same call and one of them is a mutable borrow (aliasing)
@@ -22,3 +22,7 @@ err_borrow_assign.c cannot assign to 'p' while it is borrowed by 'v'
 err_borrow_uninit.c use of borrow 'v' before initialization
 err_borrow_reborrow.c cannot use 'm' while it is mutably borrowed by 'm2'
 err_borrow_mut_of_shared.c cannot borrow 's' as mutable: it is a shared borrow
+err_nll_loop.c cannot pass 'p' as mutable borrow while it is borrowed by 'v'
+err_nll_loop_cond.c cannot pass 'p' as mutable borrow while it is borrowed by 'v'
+err_nll_same_stmt.c cannot use 'p' while it is mutably borrowed by 'm'
+err_nll_cond_kill.c cannot pass 'p' as mutable borrow while it is borrowed by 'v'
