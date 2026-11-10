@@ -40,7 +40,7 @@ C17. It is not exhaustive: optional features (decimal floating point
 | `assert(...)` is variadic | commas, e.g. in compound literals, are allowed |
 | `INFINITY`, `NAN`, `*_IS_IEC_60559`, `*_NORM_MAX` in `<float.h>` | |
 | `FLT_SNAN`, `DBL_SNAN`, `LDBL_SNAN` in `<float.h>` | constant expressions from the builtins `__builtin_nans`, `__builtin_nansf`, `__builtin_nansl` (also `__builtin_nan*`, `__builtin_inf*`) |
-| `__STDC_VERSION_*_H__` = `202311L` | defined only in the headers that are complete: `<assert.h>`, `<float.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>` |
+| `__STDC_VERSION_*_H__` = `202311L` | defined only in the headers that are complete: `<assert.h>`, `<float.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>`, `<math.h>` (Windows targets) |
 
 ## Language: gaps
 
@@ -50,7 +50,7 @@ None found by this audit.
 
 | Gap | Observed |
 |---|---|
-| `__STDC_VERSION_*_H__` of `<stdlib.h>`, `<string.h>`, `<stdio.h>`, `<time.h>`, `<math.h>`, `<uchar.h>`, `<wchar.h>`, `<inttypes.h>`, `<setjmp.h>`, `<fenv.h>`, `<complex.h>`, `<tgmath.h>`, `<stdatomic.h>` | deliberately not defined: the macro states that the header is C23-complete, and these lack the library functions below (or were not audited) |
+| `__STDC_VERSION_*_H__` of `<stdlib.h>`, `<string.h>`, `<stdio.h>`, `<time.h>`, `<uchar.h>`, `<wchar.h>`, `<inttypes.h>`, `<setjmp.h>`, `<fenv.h>`, `<complex.h>`, `<tgmath.h>`, `<stdatomic.h>` | deliberately not defined: the macro states that the header is C23-complete, and these lack the library functions below (or were not audited) |
 
 ## Library: supported
 
@@ -59,7 +59,7 @@ predates C11/C23. The following functions are provided by tcc-win's runtime
 library (`libtcc1.a`, sources `lib/c23rt.c` and `lib/c23math.c`) and declared in the shipped
 headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 `timespec_get` and `TIME_UTC`). Tested by `tests/c23/c23_runtime.c` and
-`tests/c23/c23_math2.c`.
+`tests/c23/c23_math2.c` and `tests/c23/c23_math3.c`.
 
 | Function(s) | Header | Notes |
 |---|---|---|
@@ -75,9 +75,15 @@ headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 | `pown`, `compoundn`, `rootn`, `powr`, `rsqrt` | `<math.h>` | `pown`, `compoundn` and `rootn` use double-double arithmetic: exact results are exact (`rootn(-8, 3) == -2`), others within about 0.5 ulp |
 | `fromfp`, `ufromfp`, `fromfpx`, `ufromfpx`, `FP_INT_UPWARD`, `FP_INT_DOWNWARD`, `FP_INT_TOWARDZERO`, `FP_INT_TONEARESTFROMZERO`, `FP_INT_TONEAREST` | `<math.h>` | C23 form (returns the floating type; NaN when out of range) |
 | `canonicalize`, `iscanonical`, `issignaling`, `issubnormal`, `iszero` | `<math.h>` | every encoding is canonical; `canonicalize` quiets a signaling NaN; on i386 x87 loads quiet a signaling NaN before `issignaling` sees it |
+| `llogb`, `FP_LLOGB0`, `FP_LLOGBNAN` | `<math.h>` | `long` is 32 bits: both macros are `LONG_MIN`, like `FP_ILOGB0`/`FP_ILOGBNAN` (`INT_MIN`) |
+| `totalorder`, `totalordermag`, `getpayload`, `setpayload`, `setpayloadsig`, `iseqsig` | `<math.h>` | operands read through pointers as bits, so signaling NaNs survive on i386; `getpayload` of a non-NaN is -1 |
+| `fadd`, `fsub`, `fmul`, `fdiv`, `ffma`, `fsqrt`, `faddl` ... `fsqrtl`, `daddl`, `dsubl`, `dmull`, `ddivl`, `dfmal`, `dsqrtl` | `<math.h>` | correctly rounded (one rounding, to nearest; the dynamic rounding mode is ignored), computed exactly in integer arithmetic, subnormal and overflow results included |
+| C99 `fma`, `remquo`, `remainder`, `nearbyint`, `erf`, `erfc` (each with `f` and `l`), `atan2l`, `copysignl` | `<math.h>` | missing from msvcrt.dll; `fma` correctly rounded, `remquo`/`remainder` exact, `erf` within 2 ulps and `erfc` within about 10 ulps (built on msvcrt's `exp`) |
+| C99 `isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered`, `float_t`, `double_t`, `math_errhandling`, `MATH_ERRNO`, `MATH_ERREXCEPT` | `<math.h>` | were missing from the header; `math_errhandling` is `MATH_ERRNO` (msvcrt's functions set `errno`) |
+| `rint`, `lrint`, `llrint`, `trunc` (arm64) | `<math.h>` | the inline versions used x87 assembly and did not compile for arm64 |
 
 The `<math.h>` functions set neither `errno` nor the floating-point
-exception flags (`fromfpx` behaves like `fromfp`).
+exception flags (the ones in this library; msvcrt's set `errno`) (`fromfpx` behaves like `fromfp`).
 
 ### `printf` family: `%b` / `%B`
 
@@ -102,8 +108,11 @@ are still accepted. Other output (`%p`, `%a`) is msvcrt's. Compile with
 (`wprintf`) family and `scanf` are not wrapped. Tested by
 `tests/c23/c23_printf_b.c`.
 
-The `__STDC_VERSION_*_H__` macros are still not defined, since the headers
-remain incomplete.
+The `__STDC_VERSION_*_H__` macros of the other library headers are still
+not defined, since those headers remain incomplete. `<math.h>` defines
+`__STDC_VERSION_MATH_H__` (`202311L`): every C23 `<math.h>` function and
+macro is available (the decimal floating-point ones are not required, as
+`__STDC_IEC_60559_DFP__` is not defined).
 
 ## Library: gaps
 
@@ -113,4 +122,3 @@ These are not declared and not available:
 |---|---|
 | `free_sized`, `free_aligned_sized` | C23; not provided together with `aligned_alloc` (below) |
 | `aligned_alloc` | C11; memory from msvcrt's `_aligned_malloc` cannot be released with `free`, so a compatible version needs its own allocator |
-| `llogb`, `FP_LLOGB0`, `FP_LLOGBNAN`, `totalorder`, `totalordermag`, `getpayload`, `setpayload`, `setpayloadsig`, narrowing `fadd`/`dadd`/`fsub`/`fmul`/`fdiv`/`ffma`/`fsqrt` (and variants) | C23 `<math.h>` |
