@@ -16,7 +16,10 @@
 #include <stdint.h>
 
 void *malloc(size_t);
+void free(void *);
 void *memcpy(void *, const void *, size_t);
+void *memmove(void *, const void *, size_t);
+size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 
 /* ------------------------------------------------------------------ */
@@ -128,10 +131,31 @@ int strfromd(char *restrict s, size_t n, const char *restrict format, double fp)
     len = c23_scprintf(fmt, fp);
     if (len < 0)
         return len;
-    if (n) {
-        c23_snprintf(s, n, fmt, fp);
-        if ((size_t)len >= n)
-            s[n - 1] = 0;
+    {
+        /* msvcrt writes at least three exponent digits ("1.5e+003");
+           C wants the fewest, but at least two for e/E (one for p/P) */
+        char small[64], *t = (size_t)len < sizeof small ? small : malloc(len + 1);
+        char *q;
+        if (!t)
+            return -1;
+        c23_snprintf(t, len + 1, fmt, fp);
+        t[len] = 0;
+        for (q = t; *q; q++)
+            if ((*q == 'e' || *q == 'E' || *q == 'p' || *q == 'P')
+                && (q[1] == '+' || q[1] == '-')) {
+                char *d = q + 2, *e = d;
+                int min = (*q == 'p' || *q == 'P') ? 1 : 2;
+                while (*e >= '0' && *e <= '9')
+                    e++;
+                while (e - d > min && *d == '0') {
+                    memmove(d, d + 1, strlen(d));
+                    e--;
+                }
+                break;
+            }
+        len = put_str(s, n, t);
+        if (t != small)
+            free(t);
     }
     return len;
 }
