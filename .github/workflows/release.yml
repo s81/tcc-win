@@ -37,7 +37,7 @@ jobs:
       tag: ${{ steps.v.outputs.tag }}
       version: ${{ steps.v.outputs.version }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - id: v
       name: tag and version
       env:
@@ -76,7 +76,7 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: create and push the tag
       env:
         TAG: ${{ needs.prepare.outputs.tag }}
@@ -116,7 +116,7 @@ jobs:
       T: ${{ matrix.target }}
       V: ${{ needs.prepare.outputs.version }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         # build from the tag, so that 'tcc -v' names it (empty: default ref)
         ref: ${{ needs.prepare.outputs.tag && format('refs/tags/{0}', needs.prepare.outputs.tag) || '' }}
@@ -140,7 +140,7 @@ jobs:
     - name: zip
       shell: pwsh
       run: Compress-Archive -Path dist/tcc-win -DestinationPath "tcc-win-$env:V-$env:T-win32.zip"
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: tcc-win-${{ env.V }}-${{ matrix.target }}-win32
         path: tcc-win-${{ env.V }}-${{ matrix.target }}-win32.zip
@@ -154,7 +154,7 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         path: dist
         merge-multiple: true

@@ -928,11 +928,14 @@ static void pe_build_imports(struct pe_info *pe)
     pe->imp_size = (ndlls + 1) * sizeof(IMAGE_IMPORT_DESCRIPTOR);
     pe->iat_size = (sym_cnt + ndlls) * sizeof(ADDR3264);
     dll_ptr = pe->thunk->data_offset;
-    thk_ptr = dll_ptr + pe->imp_size;
+    /* the import descriptors are 20 bytes each: pad so that the address
+       table (and the lookup table after it) is aligned for its pointers */
+    thk_ptr = (dll_ptr + pe->imp_size + sizeof(ADDR3264) - 1)
+              & -(int)sizeof(ADDR3264);
     ent_ptr = thk_ptr + pe->iat_size;
     pe->imp_offs = dll_ptr + rva_base;
     pe->iat_offs = thk_ptr + rva_base;
-    section_ptr_add(pe->thunk, pe->imp_size + 2*pe->iat_size);
+    section_ptr_add(pe->thunk, (thk_ptr - dll_ptr) + 2*pe->iat_size);
 
     for (i = 0; i < pe->imp_count; ++i) {
         IMAGE_IMPORT_DESCRIPTOR *hdr;

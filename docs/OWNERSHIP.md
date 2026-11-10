@@ -158,6 +158,12 @@ parameter at the same time (aliasing).
 
 ## Errors reported
 
+All ownership errors of a file are reported in one run; compilation goes
+on after each of them and fails at the end. At most one error is reported
+per variable, because later ones are usually consequences of the first
+(after `free(p); free(p);`, a third `free(p)` is not reported again).
+Other C errors still stop compilation at once, as usual in TinyCC.
+
 | Diagnostic | Meaning |
 |---|---|
 | `use of owner 'p' after move (or before initialization)` | use-after-free, double free, use of uninitialized owner |
@@ -218,5 +224,4 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   `if (p == NULL || n == 0)` and `switch` do not.
 - Return values of `[[owner]]` functions may be discarded silently.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
-- Compilation stops at the first ownership error (as for all TinyCC errors).
 - At most 64 owners and borrows per function.

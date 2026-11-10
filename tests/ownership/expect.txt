@@ -34,3 +34,7 @@ err_loop_continue.c owner 'p' is moved inside a loop
 err_loop_maybe.c owner 'p' is moved inside a loop
 err_continue_leak.c owner 'q' still owns a resource at 'continue'
 err_break_leak.c owner 'q' still owns a resource at 'break'
+err_multi.c owner 'p' still owns a resource at end of scope
+err_multi.c use of owner 'p' after move
+err_multi.c cannot move owner 'p' while it is borrowed by 'v'
+err_multi.c owner 'q' still owns a resource at 'return'
