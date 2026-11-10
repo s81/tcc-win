@@ -4155,6 +4155,10 @@ struct own_var {
     int pin;       /* id of the loop the variable is used in, 0 if none */
     int decl_cond; /* own_cond at the declaration */
     unsigned char reported; /* an error about it was reported */
+    /* source lines for the diagnostics (0: unknown) */
+    int own_line;  /* owner: where it got its current resource */
+    int move_line; /* owner: where it was last moved */
+    int brw_line;  /* borrow: where it got its current value */
 };
 
 /* A conflict with a borrow (e.g. moving the owner it borrows from) is an
@@ -4205,6 +4209,23 @@ static struct own_var *own_lending;
 static const char *own_name(struct own_var *o)
 {
     return get_tok_str(o->v, NULL);
+}
+
+static int own_line_now(void)
+{
+    return file ? file->line_num : 0;
+}
+
+/* " (<what> at line <n>)", " (<what> as a parameter)" for line -1,
+   or "" if the line is unknown */
+static const char *own_at(char *buf, const char *what, int line)
+{
+    buf[0] = 0;
+    if (line > 0)
+        snprintf(buf, 48, " (%s at line %d)", what, line);
+    else if (line < 0)
+        snprintf(buf, 48, " (%s as a parameter)", what);
+    return buf;
 }
 
 static own_mask own_bit(struct own_var *o)
@@ -4282,6 +4303,12 @@ static void own_conflict(struct own_var *b, const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(c->msg, sizeof c->msg, fmt, ap);
     va_end(ap);
+    if (b->brw_line) {
+        char at[48];
+        size_t n = strlen(c->msg);
+        snprintf(c->msg + n, sizeof c->msg - n, "%s",
+            own_at(at, "borrowed", b->brw_line));
+    }
 }
 
 /* the live range of the current value of borrow 'b' is complete:
@@ -4386,6 +4413,9 @@ static void own_declare(Sym *s, int st)
     o->last_use = o->last_stmt = -1;
     o->live_end = o->pin = 0;
     o->reported = 0;
+    o->own_line = st == OWN_OWNED ? own_line_now() : 0;
+    o->move_line = 0;
+    o->brw_line = kind != OWN_OWNER && st == OWN_OWNED ? own_line_now() : 0;
 }
 
 /* record a conflict with every live borrow other than 'skip' of a
@@ -4425,9 +4455,12 @@ static void own_use(Sym *s)
             else
                 own_read(o); /* may not run: the old value may live on */
         }
-        if (o->kind == OWN_OWNER && (o->st == OWN_OWNED || o->st == OWN_MAYBE))
-            own_err(o, "assignment overwrites owner '%s' which %s owns a resource (leak)",
-                name, o->st == OWN_OWNED ? "still" : "possibly still");
+        if (o->kind == OWN_OWNER && (o->st == OWN_OWNED || o->st == OWN_MAYBE)) {
+            char at[48];
+            own_err(o, "assignment overwrites owner '%s' which %s owns a resource (leak)%s",
+                name, o->st == OWN_OWNED ? "still" : "possibly still",
+                own_at(at, "acquired", o->own_line));
+        }
         own_pending = o;
         return;
     }
@@ -4437,16 +4470,23 @@ static void own_use(Sym *s)
             "cannot take the address of '%s' while it is borrowed by '%s'", name);
         own_read(o);
         o->st = OWN_OWNED;
+        o->own_line = own_line_now();
         return;
     }
     if (o->st == OWN_MOVED) {
-        if (o->kind == OWN_OWNER)
-            own_err(o, "use of owner '%s' after move (or before initialization)", name);
-        else
+        char at[48];
+        if (o->kind != OWN_OWNER)
             own_err(o, "use of borrow '%s' before initialization", name);
+        else if (o->move_line > 0)
+            own_err(o, "use of owner '%s' after move%s", name,
+                own_at(at, "moved", o->move_line));
+        else
+            own_err(o, "use of owner '%s' after move (or before initialization)", name);
     } else if (o->st == OWN_MAYBE) {
+        char at[48];
         if (o->kind == OWN_OWNER)
-            own_err(o, "use of owner '%s' which was moved on some paths", name);
+            own_err(o, "use of owner '%s' which was moved on some paths%s", name,
+                own_at(at, "moved", o->move_line));
         else
             own_err(o, "use of borrow '%s' which is not initialized on all paths", name);
     }
@@ -4656,6 +4696,7 @@ static void own_move(struct own_var *o)
                 own_err(o, "cannot move owner '%s' while it is borrowed"
                     " by an argument of the same call", own_name(o));
     o->st = OWN_MOVED;
+    o->move_line = own_line_now();
 }
 
 /* borrow 'b' now borrows from 'src' (NULL: from something untracked) */
@@ -4665,6 +4706,7 @@ static void own_borrow_init(struct own_var *b, struct own_var *src)
 
     b->of = 0; /* the previous borrow ends */
     b->st = OWN_OWNED;
+    b->brw_line = own_line_now();
     if (!src)
         return;
     if (b->kind == OWN_MUT && src->kind == OWN_SHARED)
@@ -4689,6 +4731,8 @@ static void own_assign(struct own_var *dst, struct own_var *src)
         own_move(src);
         dst->st = (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
                   && vtop->c.i == 0 ? OWN_NULL : OWN_OWNED;
+        if (dst->st == OWN_OWNED) /* a null value acquires nothing */
+            dst->own_line = own_line_now();
     } else {
         own_borrow_init(dst, src);
     }
@@ -4760,9 +4804,13 @@ static void own_check_leaks(int from, const char *where)
     for (i = from; i < own_n; ++i) {
         int st = own_vars[i].st;
         if (own_vars[i].kind == OWN_OWNER && (st == OWN_OWNED || st == OWN_MAYBE))
-            own_err(&own_vars[i], "owner '%s' %s owns a resource at %s (leak): release or move it",
+        {
+            char at[48];
+            own_err(&own_vars[i], "owner '%s' %s owns a resource at %s (leak): release or move it%s",
                 own_name(&own_vars[i]),
-                st == OWN_OWNED ? "still" : "possibly still", where);
+                st == OWN_OWNED ? "still" : "possibly still", where,
+                own_at(at, "acquired", own_vars[i].own_line));
+        }
     }
 }
 
@@ -4865,10 +4913,13 @@ static void own_loop_end(struct own_snap *pre, struct own_snap *acc,
     if (live)
         for (i = 0; i < pre->n && i < own_n; ++i)
             if (own_vars[i].kind == OWN_OWNER && pre->st[i] == OWN_OWNED
-                && (own_vars[i].st == OWN_MOVED || own_vars[i].st == OWN_MAYBE))
+                && (own_vars[i].st == OWN_MOVED || own_vars[i].st == OWN_MAYBE)) {
+                char at[48];
                 own_err(&own_vars[i], "owner '%s' is moved inside a loop (it would be"
-                    " used again in the next iteration)",
-                    own_name(&own_vars[i]));
+                    " used again in the next iteration)%s",
+                    own_name(&own_vars[i]),
+                    own_at(at, "moved", own_vars[i].move_line));
+            }
     own_narrow(exit_null); /* the condition is false after an iteration */
     own_acc(acc, live);
     own_restore(pre);
@@ -9971,8 +10022,12 @@ static void gen_function(Sym *sym)
     {
         Sym *pa;
         for (pa = sym->type.ref->next; pa; pa = pa->next)
-            if ((pa->a.owner || pa->a.borrow) && (pa->v & ~SYM_FIELD) < SYM_FIRST_ANOM)
+            if ((pa->a.owner || pa->a.borrow) && (pa->v & ~SYM_FIELD) < SYM_FIRST_ANOM) {
+                int n0 = own_n;
                 own_declare(sym_find(pa->v & ~SYM_FIELD), OWN_OWNED);
+                if (own_n > n0) /* no source line: it comes from the caller */
+                    own_vars[n0].own_line = own_vars[n0].brw_line = -1;
+            }
     }
     block(0);
     own_leave(0);

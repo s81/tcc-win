@@ -38,3 +38,11 @@ err_multi.c owner 'p' still owns a resource at end of scope
 err_multi.c use of owner 'p' after move
 err_multi.c cannot move owner 'p' while it is borrowed by 'v'
 err_multi.c owner 'q' still owns a resource at 'return'
+err_double_free.c use of owner 'p' after move (moved at line 5)
+err_loop_continue.c owner 'p' is moved inside a loop (it would be used again in the next iteration) (moved at line 8)
+err_leak_return.c owner 'p' still owns a resource at 'return' (leak): release or move it (acquired at line 4)
+err_null_while_break.c owner 'p' still owns a resource at 'return' (leak): release or move it (acquired at line 5)
+err_param_leak.c owner 'p' still owns a resource at end of scope (leak): release or move it (acquired as a parameter)
+err_overwrite.c assignment overwrites owner 'p' which still owns a resource (leak) (acquired at line 4)
+err_borrow_move.c cannot move owner 'p' while it is borrowed by 'v' (borrowed at line 7)
+err_borrow_two_mut.c cannot borrow 'p' as mutable because it is also borrowed as mutable by 'm1' (borrowed at line 8)

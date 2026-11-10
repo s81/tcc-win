@@ -164,6 +164,19 @@ per variable, because later ones are usually consequences of the first
 (after `free(p); free(p);`, a third `free(p)` is not reported again).
 Other C errors still stop compilation at once, as usual in TinyCC.
 
+Each error says where the variable got into the state it complains about:
+
+```
+f.c:6: error: use of owner 'p' after move (moved at line 5)
+f.c:9: error: cannot move owner 'p' while it is borrowed by 'v' (borrowed at line 7)
+f.c:7: error: owner 'p' still owns a resource at 'return' (leak): release or move it (acquired at line 4)
+```
+
+"Acquired" is where the owner got its current resource (its declaration,
+an assignment, or `&p`); for an `[[owner]]` parameter it is "acquired as a
+parameter". When an owner was moved or acquired on several paths, the
+line of the last one in the source is given.
+
 | Diagnostic | Meaning |
 |---|---|
 | `use of owner 'p' after move (or before initialization)` | use-after-free, double free, use of uninitialized owner |
