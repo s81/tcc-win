@@ -46,3 +46,8 @@ err_param_leak.c owner 'p' still owns a resource at end of scope (leak): release
 err_overwrite.c assignment overwrites owner 'p' which still owns a resource (leak) (acquired at line 4)
 err_borrow_move.c cannot move owner 'p' while it is borrowed by 'v' (borrowed at line 7)
 err_borrow_two_mut.c cannot borrow 'p' as mutable because it is also borrowed as mutable by 'm1' (borrowed at line 8)
+err_struct_leak.c owner 's.data' still owns a resource at 'return' (leak): release or move it (acquired at line 5)
+err_struct_double_free.c use of owner 's.data' after move (moved at line 6)
+err_struct_use_after_move.c use of owner 's.data' after move (moved at line 6)
+err_struct_overwrite.c assignment overwrites owner 's.data' which still owns a resource (leak) (acquired at line 5)
+err_struct_copy_use.c use of owner 's.data' after move (moved at line 7)

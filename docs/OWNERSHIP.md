@@ -209,6 +209,95 @@ gets a new value first. `break` and `continue` leave the loop body, so
 owners declared in it must be released or null there (like at `return`). A borrow assigned on
 different paths borrows from all of the possible sources.
 
+## Owners inside structs
+
+A struct member can be declared `[[owner]]` (it must have pointer type).
+For each **local variable or by-value parameter** of such a struct type,
+every owner member is tracked as a separate owner named `s.field`, with all
+the rules above: moves, null tests, leaks, use after move, loops and
+control flow.
+
+```c
+struct buf {
+    [[owner]] char *data;
+    size_t len;
+};
+
+static void buf_free(struct buf *b) { free(b->data); }
+
+int demo(void)
+{
+    struct buf s = { malloc(16), 16 };
+    if (!s.data)                    // null test: s.data is null in 'then'
+        return -1;
+    [[owner]] char *p = s.data;     // moves s.data into p
+    s.data = malloc(32);            // ok: s.data was moved
+    free(p);
+    buf_free(&s);                   // '&s' hands the fields to buf_free
+    return 0;
+}
+
+int bad(void)
+{
+    struct buf s = { malloc(16), 16 };
+    free(s.data);
+    return s.data[0];   // error: use of owner 's.data' after move
+}
+```
+
+**Initialization.** With an initializer list (`= { ... }`, `= {}`,
+designators), a field initialized with a null constant, or not mentioned
+(zero-initialized), is *null*; a field initialized with any other value is
+*owned*, and a plain owner name used as its value is moved
+(`{ .data = p }`). With an initializer that is another struct variable
+(`struct buf t = s;`), the fields of `t` take over the states of the fields
+of `s`, which are moved. With any other initializer (e.g. a function call
+`= make()`) all owner fields are *owned*. Without an initializer they are
+uninitialized (*moved*), like plain owners.
+
+**Fields.** `s.field` is used exactly like the name of a plain owner:
+`free(s.data)` and `return s.data;` move it, `s.data = malloc(n)` is checked
+for overwriting an owned value, `[[owner]] char *p = s.data;` moves it,
+`if (s.data == NULL)` and the other null tests narrow it, `&s.data` makes it
+owned, and borrows (`[[borrow]] const char *v = s.data;`, `len(s.data)`)
+borrow from it.
+
+**The whole struct.** A struct with owner fields is a resource itself:
+
+| Operation | Effect on the owner fields of `s` |
+|---|---|
+| `return s;`, `f(s)` (passed by value), any other use of the value of `s` | moved (each must be owned or null: a moved field is a use after move) |
+| `t = s;`, `struct buf t = s;` | moved into the fields of `t` (`t` gets their states) |
+| `s = expr;` | overwrite check for every field, then owned (copied states if `expr` is a struct variable) |
+| `&s` (e.g. `init(&s)`, `cleanup(&s)`, `memcpy(&s, ...)`) | handed to whoever gets the address: treated as *null*, i.e. released and no longer checked |
+
+The convention for `&s` follows the typical C pattern of init and cleanup
+functions that take a pointer to the struct: **passing `&s` hands the
+responsibility for the fields to the callee**. The checker cannot see what
+the callee does, so after `&s` the fields are neither reported as leaks nor
+as used after move until they get a new value (`s.data = malloc(..)`,
+`s = ...`).
+
+A by-value parameter of a struct type with owner fields owns its fields on
+entry ("acquired as a parameter"), like an `[[owner]]` parameter.
+
+Limitations of struct tracking:
+
+- Only one level: owner fields of a struct member of `s` (`s.inner.p`),
+  of anonymous struct/union members, of array elements and of structs
+  reached through pointers (`ps->p`) are not tracked. Globals and statics
+  are not tracked.
+- `&s` releases all fields without checking (see above); a pointer taken
+  with `&s` (`struct buf *ps = &s;`) is not connected to `s`.
+- Whole structs cannot be borrowed (`[[borrow]]` needs a pointer);
+  `[[borrow]]` and `[[borrow_mut]]` struct members are not checked.
+- An initializer of the form `(struct buf){0}` or any other expression than
+  an initializer list or a struct variable makes all owner fields *owned*.
+- Unions with owner members are tracked like structs (each member
+  separately), which is usually wrong; do not use owners in unions.
+- Each owner field counts towards the limit of 64 tracked variables per
+  function.
+
 ## Limitations
 
 The checker runs inside TinyCC's single-pass parser, so it is deliberately
@@ -232,9 +321,12 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
 - At most 128 conflicts are pending per function; beyond that a conflict is
   reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.
-- Owners and borrows in structs, globals, statics and arrays are not tracked.
+- Owners and borrows in globals, statics and arrays are not tracked; in
+  structs only `[[owner]]` fields of local struct variables and by-value
+  parameters are (see *Owners inside structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
 - Return values of `[[owner]]` functions may be discarded silently.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
-- At most 64 owners and borrows per function.
+- At most 64 owners and borrows per function (each tracked struct field
+  counts as one).

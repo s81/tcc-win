@@ -595,6 +595,15 @@ extern wchar_t **_wenviron;
 
 #endif /* !__NO_ISOCEXT */
 
+#if __STDC_VERSION__ >= 202311L
+  /* C23, in libtcc1.a.  aligned_alloc, free_sized and free_aligned_sized
+     are not provided: msvcrt's free cannot release aligned memory. */
+  size_t __cdecl memalignment(const void *_P);
+  int __cdecl strfromd(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,double _Fp);
+  int __cdecl strfromf(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,float _Fp);
+  int __cdecl strfroml(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,long double _Fp);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
