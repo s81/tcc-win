@@ -223,7 +223,7 @@ struct buf {
     size_t len;
 };
 
-static void buf_free(struct buf *b) { free(b->data); }
+static void buf_free(struct buf *b) { free(b->data); b->data = NULL; }
 
 int demo(void)
 {
@@ -281,14 +281,76 @@ as used after move until they get a new value (`s.data = malloc(..)`,
 A by-value parameter of a struct type with owner fields owns its fields on
 entry ("acquired as a parameter"), like an `[[owner]]` parameter.
 
+**Nested structs.** A struct member whose type has owner fields (directly
+or in its own members) makes the outer struct a struct with owner fields
+too. Its fields are tracked with their full name, up to four member names
+(`s.f`, `s.a.f`, `s.a.b.f`, `s.a.b.c.f`); deeper fields are not tracked.
+Everything above applies to them, and the whole-struct operations apply to
+a struct member as well as to the variable, for the fields under it:
+
+```c
+struct conn { struct buf in, out; [[owner]] char *name; };
+
+struct conn c = { .in = { malloc(4), 4 } };  // c.in.data owned, c.out.data and c.name null
+free(c.in.data);                              // moves c.in.data
+c.out = make_buf();                           // overwrite check for c.out.data, then owned
+buf_free(&c.out);                             // '&c.out' hands over the fields under c.out
+struct buf b = c.in;                          // moves the fields under c.in into b
+```
+
+`&c` hands over all fields of `c`, nested ones included; `return c;` and
+passing `c` by value move all of them. A member of an anonymous struct or
+union is named without it (`s.x`), as in C. Designators (`{ .in.data = p }`)
+and nested initializer lists set the nested fields; a member initialized
+with a struct variable (`{ .in = b }`) takes over its field states.
+
+**Pointer parameters.** For a parameter that is a pointer to a struct with
+owner fields (`void f(struct buf *b)`, without `[[owner]]`/`[[borrow]]`),
+the fields of the pointed-to object are tracked inside the function as
+`b->data` (and `b->in.data` for nested members). They belong to the
+caller's object, so they start *owned* and are never reported as leaks.
+The checks are:
+
+- use after move: `free(b->data); b->data[0] = 0;` and double frees;
+- overwrite: assigning a field that was acquired in the function
+  (`b->data = malloc(1); b->data = malloc(2);`) or that is possibly
+  owned. The first assignment of a field that the function has not touched
+  yet is accepted: init functions write into uninitialized objects;
+- **left moved**: the object outlives the function, so a field that is
+  moved (released, returned, moved into another owner) must get a new
+  value (e.g. `NULL`) before every `return` and at the end of the function:
+
+```c
+void buf_free(struct buf *b)
+{
+    free(b->data);
+    b->data = NULL;      // without this: error: owner field 'b->data'
+}                        // left moved at return: assign it (e.g. NULL) ...
+```
+
+Passing the pointer itself to a function (`free(b)`, `other(b)`, except to
+a `[[borrow]]` parameter), assigning it (`b = ...`) or taking its address
+hands all its fields over: they are not checked any more, so a destructor
+that frees the object itself (`free(b->data); free(b);`) needs no `NULL`.
+Null tests of the pointer (`if (!b) return;`) do not hand anything over.
+
 Limitations of struct tracking:
 
-- Only one level: owner fields of a struct member of `s` (`s.inner.p`),
-  of anonymous struct/union members, of array elements and of structs
-  reached through pointers (`ps->p`) are not tracked. Globals and statics
-  are not tracked.
+- Arrays are not tracked element by element: a local array of owners
+  (`[[owner]] char *v[8]`) is accepted but its elements are not checked
+  at all, and owner fields of struct array elements (`struct buf a[4]`, also as a
+  struct member) and of structs reached through other pointers
+  (`s.next->data`, `ps->next->data`, local pointer variables) are not
+  tracked. Releasing an array of owners takes a loop the checker cannot
+  verify, so keep such arrays in plain pointers and document who frees
+  them. Globals and statics are not tracked.
+- Fields more than four member names deep are not tracked.
 - `&s` releases all fields without checking (see above); a pointer taken
   with `&s` (`struct buf *ps = &s;`) is not connected to `s`.
+- Pointer parameters: copies of the pointer (`struct buf *q = b;`) are not
+  connected to it, so `free(b->data); q->data = NULL;` is still reported
+  as left moved; `(*b).data` is not tracked. `[[owner]]`, `[[borrow]]`
+  and `[[borrow_mut]]` pointer parameters only track the pointer itself.
 - Whole structs cannot be borrowed (`[[borrow]]` needs a pointer);
   `[[borrow]]` and `[[borrow_mut]]` struct members are not checked.
 - An initializer of the form `(struct buf){0}` or any other expression than
@@ -322,8 +384,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.
 - Owners and borrows in globals, statics and arrays are not tracked; in
-  structs only `[[owner]]` fields of local struct variables and by-value
-  parameters are (see *Owners inside structs*).
+  structs only `[[owner]]` fields of local struct variables, by-value
+  parameters and objects behind pointer parameters are (see *Owners inside
+  structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
 - Return values of `[[owner]]` functions may be discarded silently.

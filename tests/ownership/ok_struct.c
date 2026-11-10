@@ -12,11 +12,14 @@ struct pair {
     [[owner]] char *b;
 };
 
-/* cleanup helper: '&s' hands the fields to the callee */
+/* cleanup helper: '&s' hands the fields to the callee; the fields of
+   the caller's object must not be left dangling (see ok_struct_ptr.c) */
 static void pair_free(struct pair *p)
 {
     free(p->a);
     free(p->b);
+    p->a = nullptr;
+    p->b = nullptr;
 }
 
 static void buf_init(struct buf *b) { b->data = malloc(16); b->len = 16; }

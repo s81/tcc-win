@@ -426,4 +426,40 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
 
 #include <sec_api/stdio_s.h>
 
+/* C23: msvcrt's printf lacks %b/%B and prints three exponent digits; use
+   tcc's wrappers from libtcc1.a (lib/c23printf.c), which format %b and
+   pass the other conversions to msvcrt.  -D__TCC_MSVCRT_PRINTF opts out. */
+#if __STDC_VERSION__ >= 202311L && !defined(__TCC_MSVCRT_PRINTF)
+#ifdef __cplusplus
+extern "C" {
+#endif
+  int __tcc_printf(const char *_Format,...);
+  int __tcc_fprintf(FILE *_File,const char *_Format,...);
+  int __tcc_sprintf(char *_Dest,const char *_Format,...);
+  int __tcc_snprintf(char *_Dest,size_t _Count,const char *_Format,...);
+  int __tcc_vprintf(const char *_Format,va_list _ArgList);
+  int __tcc_vfprintf(FILE *_File,const char *_Format,va_list _ArgList);
+  int __tcc_vsprintf(char *_Dest,const char *_Format,va_list _ArgList);
+  int __tcc_vsnprintf(char *_Dest,size_t _Count,const char *_Format,va_list _ArgList);
+#ifdef __cplusplus
+}
+#endif
+#undef printf
+#undef fprintf
+#undef sprintf
+#undef snprintf
+#undef vprintf
+#undef vfprintf
+#undef vsprintf
+#undef vsnprintf
+#define printf __tcc_printf
+#define fprintf __tcc_fprintf
+#define sprintf __tcc_sprintf
+#define snprintf __tcc_snprintf
+#define vprintf __tcc_vprintf
+#define vfprintf __tcc_vfprintf
+#define vsprintf __tcc_vsprintf
+#define vsnprintf __tcc_vsnprintf
+#endif
+
 #endif

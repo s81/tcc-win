@@ -514,6 +514,68 @@ __C23_FMAXMIN(fminimum_mag)
 __C23_FMAXMIN(fmaximum_mag_num)
 __C23_FMAXMIN(fminimum_mag_num)
 #undef __C23_FMAXMIN
+/* in libtcc1.a (lib/c23math.c) */
+#define __C23_F1(n) \
+  double __cdecl n(double _X); \
+  float __cdecl n##f(float _X); \
+  long double __cdecl n##l(long double _X);
+#define __C23_F2(n) \
+  double __cdecl n(double _Y,double _X); \
+  float __cdecl n##f(float _Y,float _X); \
+  long double __cdecl n##l(long double _Y,long double _X);
+#define __C23_FN(n) \
+  double __cdecl n(double _X,long long _N); \
+  float __cdecl n##f(float _X,long long _N); \
+  long double __cdecl n##l(long double _X,long long _N);
+#define __C23_FX(n) \
+  double __cdecl n(double _X,int _Rnd,unsigned int _Width); \
+  float __cdecl n##f(float _X,int _Rnd,unsigned int _Width); \
+  long double __cdecl n##l(long double _X,int _Rnd,unsigned int _Width);
+__C23_F1(acospi)
+__C23_F1(asinpi)
+__C23_F1(atanpi)
+__C23_F2(atan2pi)
+__C23_F1(cospi)
+__C23_F1(sinpi)
+__C23_F1(tanpi)
+__C23_F1(exp10)
+__C23_F1(exp10m1)
+__C23_F1(exp2m1)
+__C23_F1(log10p1)
+__C23_F1(log2p1)
+__C23_F1(logp1)
+__C23_FN(compoundn)
+__C23_FN(pown)
+__C23_F2(powr)
+__C23_FN(rootn)
+__C23_F1(rsqrt)
+__C23_FX(fromfp)
+__C23_FX(ufromfp)
+__C23_FX(fromfpx)
+__C23_FX(ufromfpx)
+#undef __C23_F1
+#undef __C23_F2
+#undef __C23_FN
+#undef __C23_FX
+int __cdecl canonicalize(double *_Cx,const double *_X);
+int __cdecl canonicalizef(float *_Cx,const float *_X);
+int __cdecl canonicalizel(long double *_Cx,const long double *_X);
+
+#define FP_INT_UPWARD 0
+#define FP_INT_DOWNWARD 1
+#define FP_INT_TOWARDZERO 2
+#define FP_INT_TONEARESTFROMZERO 3
+#define FP_INT_TONEAREST 4
+
+int __cdecl __issignaling(double);
+int __cdecl __issignalingf(float);
+int __cdecl __issignalingl(long double);
+#define issignaling(x) \
+  _Generic(x, float: __issignalingf, double: __issignaling, long double: __issignalingl)(x)
+/* every binary floating-point encoding is canonical */
+#define iscanonical(x) ((void)(x), 1)
+#define issubnormal(x) (fpclassify(x) == FP_SUBNORMAL)
+#define iszero(x) (fpclassify(x) == FP_ZERO)
 #endif
 
 /* Mini libm (inline __fpclassify*, __signbit* and variants) */
