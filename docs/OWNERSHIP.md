@@ -183,7 +183,11 @@ parameter at the same time (aliasing).
 | `[[borrow]] requires a pointer to const` | use `[[borrow_mut]]` for write access |
 
 **Control flow.** States are merged at the end of `if`/`else`, `switch`,
-and loops, taking `return` and `break` into account. A borrow assigned on
+and loops, taking `return`, `break` and `continue` into account. The state
+at a `continue` reaches the next iteration, like the end of the loop body,
+so an owner released before `continue` is "moved inside a loop" unless it
+gets a new value first. `break` and `continue` leave the loop body, so
+owners declared in it must be released or null there (like at `return`). A borrow assigned on
 different paths borrows from all of the possible sources.
 
 ## Limitations
@@ -203,9 +207,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   use in a later branch of the same `if` is an error, and a borrow that is
   reassigned in both branches of an `if` still counts as possibly holding
   the old value.
-- `continue` paths are not tracked. `goto` is rejected by tcc-win unless
-  `-fgoto` is given; with `-fgoto`, `goto` paths are not tracked either (a
-  backward `goto` that forms a loop does not keep a borrow alive).
+- `goto` is rejected by tcc-win unless `-fgoto` is given; with `-fgoto`,
+  `goto` paths are not tracked (a backward `goto` that forms a loop does
+  not keep a borrow alive).
 - At most 128 conflicts are pending per function; beyond that a conflict is
   reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.

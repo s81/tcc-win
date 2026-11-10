@@ -28,6 +28,17 @@ Only Windows PE output is supported: `x86_64-win32`, `i386-win32` and
 `arm64-win32`. The ARM (32 bit), RISC-V, C67, IL, COFF and Mach-O backends
 of upstream were removed.
 
+## Download
+
+Each release on the GitHub *Releases* page has a zip per target
+(`tcc-win-<version>-<target>-win32.zip`) and a `SHA256SUMS` file. Unzip it
+anywhere and run `tcc-win\tcc.exe`; it finds its headers and libraries next
+to itself. The binaries are built with MSVC and tested (compile, link and
+run) before they are published.
+
+To publish a release, push a tag such as `v0.1.0`; the `release` workflow
+does the rest.
+
 ## Building
 
 On Windows (needs an existing C compiler: gcc, cl or tcc):

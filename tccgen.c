@@ -4196,6 +4196,7 @@ static struct own_var own_vars[OWN_MAX];
 static int own_n, own_addrof;
 static struct own_var *own_pending; /* variable that is about to be assigned */
 static struct own_snap *own_brk, *own_sw;
+static struct own_snap *own_cont; /* states at 'continue' of the loop */
 static struct own_call *own_cur_call;
 /* variable about to be borrowed: conflicts are reported by the borrow */
 static struct own_var *own_lending;
@@ -4820,14 +4821,20 @@ static void own_case(void)
 
 /* end of a loop body: 'pre' is the state before the loop */
 /* 'exit_null': owner that is null when the loop condition is false */
-static void own_loop_end(struct own_snap *pre, struct own_snap *acc, int live,
-    struct own_var *exit_null)
+static void own_loop_end(struct own_snap *pre, struct own_snap *acc,
+    struct own_snap *cont, int live, struct own_var *exit_null)
 {
     int i;
+    /* 'continue' goes to the next iteration like the end of the body */
+    if (cont->live) {
+        own_acc(cont, live);
+        own_restore(cont);
+        live = 1;
+    }
     if (live)
         for (i = 0; i < pre->n && i < own_n; ++i)
-            if (own_vars[i].kind == OWN_OWNER
-                && pre->st[i] == OWN_OWNED && own_vars[i].st == OWN_MOVED)
+            if (own_vars[i].kind == OWN_OWNER && pre->st[i] == OWN_OWNED
+                && (own_vars[i].st == OWN_MOVED || own_vars[i].st == OWN_MAYBE))
                 tcc_error("owner '%s' is moved inside a loop (it would be"
                     " used again in the next iteration)",
                     own_name(&own_vars[i]));
@@ -8359,13 +8366,15 @@ static void gexpr_decl(void)
 /* run a loop body with ownership tracking */
 /* 'nv', 'neg': null test of the loop condition (see own_peek_null) */
 #define OWN_LOOP(body, nv, neg) do { \
-        struct own_snap pre_, acc_, *brk_ = own_brk; int live_; \
-        own_save(&pre_), own_acc_init(&acc_), own_brk = &acc_; \
+        struct own_snap pre_, acc_, cont_, *brk_ = own_brk, *cont0_ = own_cont; \
+        int live_; \
+        own_save(&pre_), own_acc_init(&acc_), own_acc_init(&cont_); \
+        own_brk = &acc_, own_cont = &cont_; \
         if (neg) \
             own_narrow(nv); /* while (!p): p is null in the body */ \
         body; \
-        live_ = !nocode_wanted, own_brk = brk_; \
-        own_loop_end(&pre_, &acc_, live_, (neg) ? NULL : (nv)); \
+        live_ = !nocode_wanted, own_brk = brk_, own_cont = cont0_; \
+        own_loop_end(&pre_, &acc_, &cont_, live_, (neg) ? NULL : (nv)); \
     } while (0)
 
 static void block(int flags)
@@ -8513,8 +8522,11 @@ again:
         /* compute jump */
         if (!cur_scope->bsym)
             tcc_error("cannot break");
-        if (own_brk)
+        if (own_brk) {
+            /* owners declared inside the loop or switch go out of scope */
+            own_check_leaks(own_brk->n, "'break'");
             own_acc(own_brk, !nocode_wanted);
+        }
         if (cur_switch && cur_scope->bsym == cur_switch->bsym)
             leave_scope(cur_switch->scope);
         else
@@ -8526,6 +8538,11 @@ again:
         /* compute jump */
         if (!cur_scope->csym)
             tcc_error("cannot continue");
+        if (own_cont) {
+            /* owners declared inside the loop body go out of scope */
+            own_check_leaks(own_cont->n, "'continue'");
+            own_acc(own_cont, !nocode_wanted);
+        }
         leave_scope(loop_scope);
         *cur_scope->csym = gjmp(*cur_scope->csym);
         skip(';');
@@ -9918,7 +9935,7 @@ static void gen_function(Sym *sym)
     }
     tcc_debug_prolog_epilog(tcc_state, 0);
     func_vla_arg(sym);
-    own_n = 0, own_brk = own_sw = NULL, own_pending = NULL, own_cur_call = NULL;
+    own_n = 0, own_brk = own_sw = own_cont = NULL, own_pending = NULL, own_cur_call = NULL;
     own_nconflicts = own_nloops = own_cond = 0;
     {
         Sym *pa;
