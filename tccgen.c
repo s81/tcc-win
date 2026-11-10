@@ -7411,6 +7411,57 @@ ST_FUNC void unary(void)
 	parse_builtin_params(0, "ee");
 	vpop();
         break;
+    case TOK_builtin_nan: case TOK_builtin_nanf: case TOK_builtin_nanl:
+    case TOK_builtin_nans: case TOK_builtin_nansf: case TOK_builtin_nansl:
+    case TOK_builtin_inf: case TOK_builtin_inff: case TOK_builtin_infl:
+        {
+            /* IEEE bit patterns, set by memcpy: arithmetic would quiet an sNaN */
+            static const uint32_t fbits[3] = { 0x7fc00000, 0x7fa00000, 0x7f800000 };
+            static const uint64_t dbits[3] = { 0x7ff8000000000000ULL,
+                0x7ff4000000000000ULL, 0x7ff0000000000000ULL };
+            int k = (tok - TOK_builtin_nan) / 3, w = (tok - TOK_builtin_nan) % 3;
+            if (k == 2)
+                parse_builtin_params(0, "");
+            else
+                parse_builtin_params(1, "S"), vpop();
+            memset(&type, 0, sizeof type);
+            if (w == 1) {
+                type.t = VT_FLOAT;
+                vpush(&type);
+                memcpy(&vtop->c.f, &fbits[k], 4);
+            } else if (w == 0) {
+                type.t = VT_DOUBLE;
+                vpush(&type);
+                memcpy(&vtop->c.d, &dbits[k], 8);
+            } else {
+#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+                type.t = VT_DOUBLE | VT_LONG;
+                vpush(&type);
+                memcpy(&vtop->c.d, &dbits[k], 8);
+#else
+                type.t = VT_LDOUBLE;
+                vpush(&type);
+#if defined __i386__ || defined __x86_64__
+                if (sizeof(long double) >= 10) {
+                    /* x87 extended: explicit integer bit */
+                    static const uint64_t xm[3] = { 0xc000000000000000ULL,
+                        0xa000000000000000ULL, 0x8000000000000000ULL };
+                    uint16_t e = 0x7fff;
+                    memset(&vtop->c.ld, 0, sizeof vtop->c.ld);
+                    memcpy(&vtop->c.ld, &xm[k], 8);
+                    memcpy((char *)&vtop->c.ld + 8, &e, 2);
+                } else
+#endif
+                {
+                    double d;
+                    memcpy(&d, &dbits[k], 8);
+                    vtop->c.ld = d;
+                }
+#endif
+            }
+            vtop->r = VT_CONST;
+        }
+        break;
     case TOK_builtin_types_compatible_p:
 	parse_builtin_params(0, "tt");
 	n = compare_types(&vtop[-1].type, &vtop[0].type, 1);

@@ -182,6 +182,15 @@
      DEF(TOK_builtin_return_address, "__builtin_return_address")
      DEF(TOK_builtin_expect, "__builtin_expect")
      DEF(TOK_builtin_unreachable, "__builtin_unreachable")
+     DEF(TOK_builtin_nan, "__builtin_nan")
+     DEF(TOK_builtin_nanf, "__builtin_nanf")
+     DEF(TOK_builtin_nanl, "__builtin_nanl")
+     DEF(TOK_builtin_nans, "__builtin_nans")
+     DEF(TOK_builtin_nansf, "__builtin_nansf")
+     DEF(TOK_builtin_nansl, "__builtin_nansl")
+     DEF(TOK_builtin_inf, "__builtin_inf")
+     DEF(TOK_builtin_inff, "__builtin_inff")
+     DEF(TOK_builtin_infl, "__builtin_infl")
      /*DEF(TOK_builtin_va_list, "__builtin_va_list")*/
 #if defined TCC_TARGET_PE && defined TCC_TARGET_X86_64
      DEF(TOK_builtin_va_start, "__builtin_va_start")
