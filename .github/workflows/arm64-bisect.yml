@@ -21,7 +21,8 @@ jobs:
     - uses: actions/checkout@v4
     - name: struct test program
       shell: bash
-      run: printf 'struct S { int a, b; };\nint main(void)\n{\n    struct T { struct S s; int c; } t = { { 1, 2 }, 3 };\n    return sizeof(struct S) == 8 && sizeof t == 12 && t.s.b == 2 ? 0 : 1;\n}\n' > win32/t.c
+      run: |
+        printf 'struct S { int a, b; };\nint main(void)\n{\n    struct T { struct S s; int c; } t = { { 1, 2 }, 3 };\n    return sizeof(struct S) == 8 && sizeof t == 12 && t.s.b == 2 ? 0 : 1;\n}\n' > win32/t.c
     - name: build tcc and compile the struct program
       shell: cmd
       run: |
