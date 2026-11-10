@@ -73,8 +73,8 @@
 #endif
 
 #if __STDC_VERSION__ >= 202311L
-/* C23 7.7 (FLT_SNAN, DBL_SNAN, LDBL_SNAN are not provided: tcc has no
-   signaling NaN constant, so __STDC_VERSION_FLOAT_H__ is not defined) */
+/* C23 7.7 */
+#define __STDC_VERSION_FLOAT_H__ 202311L
 #define INFINITY (1.0F/0.0F)
 #define NAN (0.0F/0.0F)
 #define FLT_IS_IEC_60559 1
@@ -83,6 +83,9 @@
 #define FLT_NORM_MAX FLT_MAX
 #define DBL_NORM_MAX DBL_MAX
 #define LDBL_NORM_MAX LDBL_MAX
+#define FLT_SNAN __builtin_nansf("")
+#define DBL_SNAN __builtin_nans("")
+#define LDBL_SNAN __builtin_nansl("")
 #endif
 
 #endif /* _FLOAT_H_ */

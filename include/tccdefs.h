@@ -196,13 +196,10 @@
     #define __builtin_huge_valf() 1e50f
     #define __builtin_huge_vall() 1e5000L
 # if defined __APPLE__
-    #define __builtin_nanf(ignored_string) (0.0F/0.0F)
     /* used by floats.h to implement FLT_ROUNDS C99 macro. 1 == to nearest */
     #define __builtin_flt_rounds() 1
     /* used by _fd_def.h */
     #define __builtin_bzero(p, ignored_size) bzero(p, sizeof(*(p)))
-# else
-    #define __builtin_nanf(ignored_string) (0.0F/0.0F)
 # endif
 #endif
 
