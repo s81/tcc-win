@@ -1,0 +1,4 @@
+err_bitint_width.c _BitInt width must be between 1 and 64
+err_no_proto.c too many arguments to function
+err_va_start.c 'va_start' used in function with fixed arguments
+err_constexpr.c constant expression expected
