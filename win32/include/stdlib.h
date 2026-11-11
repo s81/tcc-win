@@ -421,9 +421,22 @@ extern wchar_t **_wenviron;
 #define _CRT_ALLOCATION_DEFINED
   void *__cdecl calloc(size_t _NumOfElements,size_t _SizeOfElements);
   /* tcc-win: free() takes ownership of its argument (see docs/OWNERSHIP.md) */
+#if defined(__TCC_BCHECK__) && !defined(__TCC_MSVCRT_FREE)
+  /* -b: the bounds checker hooks free/realloc itself, so they must not be
+     rebound to the aligned_alloc wrappers (and aligned_alloc is not declared) */
+# define __TCC_MSVCRT_FREE
+#endif
+#if __STDC_VERSION__ >= 202311L && !defined(__TCC_MSVCRT_FREE)
+  /* C23: free and realloc also accept aligned_alloc memory: they are bound
+     to wrappers in libtcc1.a (lib/c23rt.c, docs/C23-STATUS.md).
+     -D__TCC_MSVCRT_FREE opts out (and then aligned_alloc is not declared). */
+  void __cdecl free(__attribute__((owner)) void *_Memory) __asm__("__tcc_free");
+  void *__cdecl realloc(void *_Memory,size_t _NewSize) __asm__("__tcc_realloc");
+#else
   void __cdecl free(__attribute__((owner)) void *_Memory);
-  void *__cdecl malloc(size_t _Size);
   void *__cdecl realloc(void *_Memory,size_t _NewSize);
+#endif
+  void *__cdecl malloc(size_t _Size);
   _CRTIMP void *__cdecl _recalloc(void *_Memory,size_t _Count,size_t _Size);
   _CRTIMP void __cdecl _aligned_free(void *_Memory);
   _CRTIMP void *__cdecl _aligned_malloc(size_t _Size,size_t _Alignment);
@@ -596,8 +609,13 @@ extern wchar_t **_wenviron;
 #endif /* !__NO_ISOCEXT */
 
 #if __STDC_VERSION__ >= 202311L
-  /* C23, in libtcc1.a.  aligned_alloc, free_sized and free_aligned_sized
-     are not provided: msvcrt's free cannot release aligned memory. */
+  /* C23, in libtcc1.a */
+#ifndef __TCC_MSVCRT_FREE
+  /* blocks are released by free/realloc above (not by _aligned_free) */
+  void *__cdecl aligned_alloc(size_t _Alignment,size_t _Size);
+  void __cdecl free_sized(__attribute__((owner)) void *_Ptr,size_t _Size);
+  void __cdecl free_aligned_sized(__attribute__((owner)) void *_Ptr,size_t _Alignment,size_t _Size);
+#endif
   size_t __cdecl memalignment(const void *_P);
   int __cdecl strfromd(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,double _Fp);
   int __cdecl strfromf(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,float _Fp);

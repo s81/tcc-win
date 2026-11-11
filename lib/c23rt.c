@@ -2,7 +2,9 @@
    Windows targets):
 
    <string.h> memset_explicit, strndup
-   <stdlib.h> memalignment, strfromd, strfromf, strfroml
+   <stdlib.h> memalignment, strfromd, strfromf, strfroml, aligned_alloc,
+              free_sized, free_aligned_sized; __tcc_free, __tcc_realloc
+              (free/realloc that also accept aligned_alloc blocks)
    <time.h>   gmtime_r, localtime_r, timegm, timespec_get, timespec_getres
    <math.h>   roundeven, nextup, nextdown, fmaximum, fminimum, fmaximum_num,
               fminimum_num, fmaximum_mag, fminimum_mag, fmaximum_mag_num,
@@ -17,6 +19,7 @@
 
 void *malloc(size_t);
 void free(void *);
+void *realloc(void *, size_t);
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 size_t strlen(const char *);
@@ -51,6 +54,197 @@ size_t memalignment(const void *p)
 {
     uintptr_t a = (uintptr_t)p;
     return a & -a;
+}
+
+/* aligned_alloc: msvcrt's free cannot release _aligned_malloc memory, so
+   aligned_alloc over-allocates with malloc and returns an aligned pointer
+   inside the block, with a header {size, original pointer} just before it.
+   In C23 mode <stdlib.h>/<malloc.h> bind free and realloc to __tcc_free and
+   __tcc_realloc (asm labels), which recognise such blocks.  Recognition does
+   not trust the header (the bytes before an ordinary malloc pointer belong
+   to the heap): every live over-aligned block is kept in a hash set, and
+   only pointers found there are treated as aligned blocks.  While no such
+   block is live, free and realloc cost one extra load and branch.
+   Alignments up to what malloc guarantees anyway are served by plain
+   malloc and are not tracked.  See docs/C23-STATUS.md for what remains
+   unsupported (memory released by code that does not use these wrappers). */
+
+#if defined(_WIN64) || defined(__x86_64__) || defined(__aarch64__)
+#define C23_MALLOC_ALIGN 16
+#else
+#define C23_MALLOC_ALIGN 8
+#endif
+
+/* a spin lock (held only for a few table operations) */
+#ifdef _WIN32
+__declspec(dllimport) void __stdcall Sleep(unsigned long);
+#define al_yield() Sleep(0)
+#else
+#define al_yield() ((void)0)
+#endif
+#ifndef __ATOMIC_ACQUIRE /* tcc defines these in <stdatomic.h> only */
+#define __ATOMIC_ACQUIRE 2
+#define __ATOMIC_RELEASE 3
+#endif
+static int al_lock;
+
+static void al_acquire(void)
+{
+    int one = 1, old;
+    for (;;) {
+        __atomic_exchange(&al_lock, &one, &old, __ATOMIC_ACQUIRE);
+        if (!old)
+            return;
+        al_yield();
+    }
+}
+
+static void al_release(void)
+{
+    int zero = 0;
+    __atomic_store(&al_lock, &zero, __ATOMIC_RELEASE);
+}
+
+#define AL_TOMB ((void *)1)
+static void **al_tab;               /* open addressing, linear probing */
+static size_t al_cap, al_used, al_tombs;
+static volatile size_t al_live;     /* number of live tracked blocks */
+
+static size_t al_hash(const void *p)
+{
+    uintptr_t a = (uintptr_t)p / C23_MALLOC_ALIGN;
+    return (size_t)(a * (uintptr_t)0x9E3779B97F4A7C15ull);
+}
+
+/* slot holding p, or else the slot where p would be inserted */
+static size_t al_find(const void *p)
+{
+    size_t m = al_cap - 1, i = al_hash(p) & m, tomb = (size_t)-1;
+    for (;; i = (i + 1) & m) {
+        void *k = al_tab[i];
+        if (k == p)
+            return i;
+        if (k == AL_TOMB) {
+            if (tomb == (size_t)-1)
+                tomb = i;
+        } else if (!k) {
+            return tomb != (size_t)-1 ? tomb : i;
+        }
+    }
+}
+
+/* call with the lock held; 0 when out of memory */
+static int al_insert(void *p)
+{
+    size_t i;
+    if ((al_used + al_tombs + 1) * 2 > al_cap) {
+        size_t ncap = 16, j, ocap = al_cap;
+        void **ntab, **otab = al_tab;
+        while ((al_used + 1) * 4 > ncap)
+            ncap *= 2;
+        if (!(ntab = malloc(ncap * sizeof *ntab)))
+            return 0;
+        for (j = 0; j < ncap; j++)
+            ntab[j] = 0;
+        al_tab = ntab, al_cap = ncap, al_tombs = 0;
+        for (j = 0; j < ocap; j++)
+            if (otab[j] && otab[j] != AL_TOMB)
+                al_tab[al_find(otab[j])] = otab[j];
+        free(otab);
+    }
+    i = al_find(p);
+    if (al_tab[i] == AL_TOMB)
+        al_tombs--;
+    al_tab[i] = p;
+    al_live = ++al_used;
+    return 1;
+}
+
+/* is p a live aligned_alloc block?  With del, also forget it. */
+static int al_lookup(void *p, int del)
+{
+    int found = 0;
+    if (!p || !al_live || ((uintptr_t)p & (2 * C23_MALLOC_ALIGN - 1)))
+        return 0;
+    al_acquire();
+    if (al_cap) {
+        size_t i = al_find(p);
+        if (al_tab[i] == p) {
+            found = 1;
+            if (del) {
+                al_tab[i] = AL_TOMB;
+                al_tombs++;
+                al_live = --al_used;
+            }
+        }
+    }
+    al_release();
+    return found;
+}
+
+void *aligned_alloc(size_t alignment, size_t size)
+{
+    char *orig, *p;
+    int ok;
+    if (alignment == 0 || (alignment & (alignment - 1)))
+        return 0;
+    if (alignment <= C23_MALLOC_ALIGN)
+        return malloc(size);
+    if (size > (size_t)-1 - alignment)
+        return 0;
+    /* orig is C23_MALLOC_ALIGN aligned and alignment is larger, so
+       p - orig is in [C23_MALLOC_ALIGN, alignment]: room for the header */
+    if (!(orig = malloc(size + alignment)))
+        return 0;
+    p = (char *)(((uintptr_t)orig + alignment) & ~(uintptr_t)(alignment - 1));
+    ((void **)p)[-1] = orig;
+    ((size_t *)p)[-2] = size;
+    al_acquire();
+    ok = al_insert(p);
+    al_release();
+    if (!ok) {
+        free(orig);
+        return 0;
+    }
+    return p;
+}
+
+void __tcc_free(void *p)
+{
+    if (al_lookup(p, 1))
+        p = ((void **)p)[-1];
+    free(p);
+}
+
+void *__tcc_realloc(void *p, size_t n)
+{
+    void *q;
+    size_t old;
+    if (!al_lookup(p, 0))
+        return realloc(p, n);
+    /* an aligned block: the result need only be malloc-aligned */
+    if (n == 0) {           /* like msvcrt's realloc(p, 0): free, NULL */
+        __tcc_free(p);
+        return 0;
+    }
+    if (!(q = malloc(n)))   /* the old block stays valid */
+        return 0;
+    old = ((size_t *)p)[-2];
+    memcpy(q, p, old < n ? old : n);
+    __tcc_free(p);
+    return q;
+}
+
+void free_sized(void *p, size_t size)
+{
+    (void)size;
+    __tcc_free(p);
+}
+
+void free_aligned_sized(void *p, size_t alignment, size_t size)
+{
+    (void)alignment, (void)size;
+    __tcc_free(p);
 }
 
 #ifdef _WIN32

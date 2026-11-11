@@ -7,7 +7,10 @@ A Windows-only fork of the [Tiny C Compiler](https://repo.or.cz/tinycc.git)
 2. **Rust-like ownership and borrow checking** with non-lexical lifetimes
    for pointers marked `[[owner]]`, `[[borrow]]` and `[[borrow_mut]]`
    (opt-in, compile-time only, see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)),
-   including `[[owner]]` fields of local structs.
+   including `[[owner]]` fields of local structs, local arrays of owners
+   (element by element, for constant indexes) and owner fields reached
+   through owner pointers (`p->data`, `p->next->data`). Globals, statics,
+   plain (unannotated) pointers and struct arrays are not tracked.
 3. **No `goto`** (see [below](#no-goto)).
 
 ```c
@@ -32,13 +35,13 @@ of upstream were removed.
 ## Download
 
 Each release on the GitHub *Releases* page has a zip per target
-(`tcc-win-<version>-<target>-win32.zip`) and a `SHA256SUMS` file. Unzip it
+(for example `tcc-win-1.0.0-x86_64-win32.zip`) and a `SHA256SUMS` file. Unzip it
 anywhere and run `tcc-win\tcc.exe`; it finds its headers and libraries next
 to itself. The binaries are built with MSVC and tested (compile, link and
 run) before they are published.
 
 To publish a release, open *Actions → release → Run workflow* on GitHub,
-keep the branch `main`, enter a version such as `v0.1.0` and run it: the
+keep the branch `main`, enter the next version (the current one is 1.0.0, so for example `v1.0.1`) and run it: the
 workflow creates the tag, builds and tests the zips, and publishes the
 release. Pushing a tag `v*` from a clone does the same.
 
@@ -94,7 +97,7 @@ found supported and what is still missing.
 | `auto` type inference | added (single plain declarator: `auto x = expr;`) |
 | `typeof`, `typeof_unqual` | upstream / added |
 | `_BitInt(N)`, `wb`/`uwb` constants | added for N <= 64 (`BITINT_MAXWIDTH` is 64, the minimum C23 requires) |
-| `[[attributes]]`: `noreturn`, `deprecated`, `fallthrough`, `maybe_unused`, `nodiscard`, `unsequenced`, `reproducible` | added: parsed in all positions; only `noreturn` (and `owner`, `borrow`, `borrow_mut`) have an effect |
+| `[[attributes]]`: `noreturn`, `deprecated`, `fallthrough`, `maybe_unused`, `nodiscard`, `unsequenced`, `reproducible` | added: parsed in all positions; `noreturn`, `nodiscard` and `deprecated` (warnings, see below) and `owner`, `borrow`, `borrow_mut` have an effect |
 | `__has_c_attribute`, `__has_include`, `__has_embed` | added / upstream / added |
 | `#embed` with `limit`, `prefix`, `suffix`, `if_empty` | added (`limit` takes an integer constant, not an expression) |
 | `#elifdef`, `#elifndef`, `#warning` | added / added / upstream |
@@ -102,7 +105,7 @@ found supported and what is still missing.
 | `va_start(ap)` with one argument, `f(...)` without named parameter | added |
 | `f()` means `f(void)` | added |
 | binary literals `0b101`, digit separators `1'000'000` | upstream / added |
-| `u8'c'` character constants, `u8"..."` strings, `char8_t` | added (the constant has type `int` and the string type `char[]`, not `char8_t`) |
+| `u8'c'` character constants, `u8"..."` strings, `char8_t` | added (the constant has type `unsigned char`; the string type is `char[]`, not `char8_t`) |
 | `enum E : type` | upstream |
 | empty initializer `= {}` (also for scalars) | upstream / added |
 | unnamed parameters in function definitions | added |
@@ -111,18 +114,36 @@ found supported and what is still missing.
 | `unreachable()` in `<stddef.h>` | added |
 | `<stdbit.h>`, `<stdckdint.h>` | added |
 | `BITINT_MAXWIDTH`, `*_WIDTH` in `<limits.h>` | added |
+| `__STDC_VERSION_*_H__` | defined only in the complete headers: `<assert.h>`, `<float.h>`, `<limits.h>`, `<math.h>`, `<stdarg.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>` |
+| C runtime additions (`libtcc1.a`): `printf`-family `%b`/`%B` wrappers; all of C23 `<math.h>`; `memset_explicit`, `strndup`, `memalignment`, `strfromd/f/l`, `gmtime_r`, `localtime_r`, `timegm`, `timespec_get`, `timespec_getres` | added, see [docs/C23-STATUS.md](docs/C23-STATUS.md) |
 
 Known deviations and gaps:
 
-- `_BitInt(N)` with N > 64 is rejected. The result of `c ? a : b` with
+- `_BitInt(N)` with N > 64 is rejected (`BITINT_MAXWIDTH` stays 64): the
+  single-pass code generator keeps every value in one or two machine
+  registers, and wide integers would need a separate memory-based value
+  class for every operator, conversion and ABI. The result of `c ? a : b` with
   `_BitInt` operands has the underlying standard type, and `_BitInt`
   bit-fields are not supported.
-- `[[nodiscard]]` and `[[deprecated]]` produce no diagnostics.
+- `[[nodiscard]]` warns when the result of a direct call to a `[[nodiscard]]`
+  function (or to a function returning a `struct`/`union`/`enum` declared
+  `[[nodiscard]]`) is discarded in an expression statement; `(void)` casts
+  silence it and the reason string is not printed. `[[deprecated("msg")]]`
+  warns on use of a function, variable or typedef (not on struct tags,
+  enumerators or members). Both are ordinary warnings, enabled by default and
+  silenced by `-w`.
 - Decimal floating point (`_Decimal32/64/128`) is not supported; it is an
   optional feature in C23.
-- The C library is the one of Windows (msvcrt). Library additions of C23
-  such as `printf("%b")`, `memset_explicit` or `strdup` depend on it.
-- Old-style (K&R) function definitions are still accepted.
+- The C library is the one of Windows (msvcrt); the C23 additions listed
+  above are supplied by tcc-win's runtime library, including `aligned_alloc`,
+  `free_sized` and `free_aligned_sized` (see
+  [docs/C23-STATUS.md](docs/C23-STATUS.md#library-supported) for the limits of
+  the aligned allocator). The `__STDC_VERSION_*_H__` macros of the other
+  library headers (`<stdlib.h>`, `<string.h>`, `<stdio.h>`, `<time.h>`, ...)
+  are not defined.
+- Old-style (K&R) function definitions are an error in C23 mode
+  (`-std=c23`, the default); they are accepted with `-std=c17` or lower. The
+  upstream test suite (`tests/tcctest.c`) is compiled with `-std=c17`.
 
 ## No goto
 
