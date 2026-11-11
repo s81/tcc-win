@@ -94,7 +94,7 @@ found supported and what is still missing.
 | `auto` type inference | added (single plain declarator: `auto x = expr;`) |
 | `typeof`, `typeof_unqual` | upstream / added |
 | `_BitInt(N)`, `wb`/`uwb` constants | added for N <= 64 (`BITINT_MAXWIDTH` is 64, the minimum C23 requires) |
-| `[[attributes]]`: `noreturn`, `deprecated`, `fallthrough`, `maybe_unused`, `nodiscard`, `unsequenced`, `reproducible` | added: parsed in all positions; only `noreturn` (and `owner`, `borrow`, `borrow_mut`) have an effect |
+| `[[attributes]]`: `noreturn`, `deprecated`, `fallthrough`, `maybe_unused`, `nodiscard`, `unsequenced`, `reproducible` | added: parsed in all positions; `noreturn`, `nodiscard` and `deprecated` (warnings, see below) and `owner`, `borrow`, `borrow_mut` have an effect |
 | `__has_c_attribute`, `__has_include`, `__has_embed` | added / upstream / added |
 | `#embed` with `limit`, `prefix`, `suffix`, `if_empty` | added (`limit` takes an integer constant, not an expression) |
 | `#elifdef`, `#elifndef`, `#warning` | added / added / upstream |
@@ -114,15 +114,26 @@ found supported and what is still missing.
 
 Known deviations and gaps:
 
-- `_BitInt(N)` with N > 64 is rejected. The result of `c ? a : b` with
+- `_BitInt(N)` with N > 64 is rejected (`BITINT_MAXWIDTH` stays 64): the
+  single-pass code generator keeps every value in one or two machine
+  registers, and wide integers would need a separate memory-based value
+  class for every operator, conversion and ABI. The result of `c ? a : b` with
   `_BitInt` operands has the underlying standard type, and `_BitInt`
   bit-fields are not supported.
-- `[[nodiscard]]` and `[[deprecated]]` produce no diagnostics.
+- `[[nodiscard]]` warns when the result of a direct call to a `[[nodiscard]]`
+  function (or to a function returning a `struct`/`union`/`enum` declared
+  `[[nodiscard]]`) is discarded in an expression statement; `(void)` casts
+  silence it and the reason string is not printed. `[[deprecated("msg")]]`
+  warns on use of a function, variable or typedef (not on struct tags,
+  enumerators or members). Both are ordinary warnings, enabled by default and
+  silenced by `-w`.
 - Decimal floating point (`_Decimal32/64/128`) is not supported; it is an
   optional feature in C23.
 - The C library is the one of Windows (msvcrt). Library additions of C23
   such as `printf("%b")`, `memset_explicit` or `strdup` depend on it.
-- Old-style (K&R) function definitions are still accepted.
+- Old-style (K&R) function definitions are an error in C23 mode
+  (`-std=c23`, the default); they are accepted with `-std=c17` or lower. The
+  upstream test suite (`tests/tcctest.c`) is compiled with `-std=c17`.
 
 ## No goto
 

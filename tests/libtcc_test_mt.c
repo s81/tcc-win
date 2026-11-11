@@ -351,7 +351,7 @@ int main(int argc, char **argv)
 # define sleep_ms(x) usleep((x)*1000);
 #endif
 
-int fib(n)
+int fib(int n)
 {
     return (n <= 2) ? 1 : fib(n-1) + fib(n-2);
 }
