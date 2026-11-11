@@ -82,8 +82,9 @@ headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 | C99 `isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered`, `float_t`, `double_t`, `math_errhandling`, `MATH_ERRNO`, `MATH_ERREXCEPT` | `<math.h>` | were missing from the header; `math_errhandling` is `MATH_ERRNO` (msvcrt's functions set `errno`) |
 | `rint`, `lrint`, `llrint`, `trunc` (arm64) | `<math.h>` | the inline versions used x87 assembly and did not compile for arm64 |
 
-The `<math.h>` functions set neither `errno` nor the floating-point
-exception flags (the ones in this library; msvcrt's set `errno`) (`fromfpx` behaves like `fromfp`).
+The `<math.h>` functions implemented in this library set neither `errno` nor
+the floating-point exception flags (msvcrt's own functions set `errno`);
+`fromfpx` behaves like `fromfp`.
 
 ### `printf` family: `%b` / `%B`
 
