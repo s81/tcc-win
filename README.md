@@ -7,7 +7,10 @@ A Windows-only fork of the [Tiny C Compiler](https://repo.or.cz/tinycc.git)
 2. **Rust-like ownership and borrow checking** with non-lexical lifetimes
    for pointers marked `[[owner]]`, `[[borrow]]` and `[[borrow_mut]]`
    (opt-in, compile-time only, see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)),
-   including `[[owner]]` fields of local structs.
+   including `[[owner]]` fields of local structs, local arrays of owners
+   (element by element, for constant indexes) and owner fields reached
+   through owner pointers (`p->data`, `p->next->data`). Globals, statics,
+   plain (unannotated) pointers and struct arrays are not tracked.
 3. **No `goto`** (see [below](#no-goto)).
 
 ```c
