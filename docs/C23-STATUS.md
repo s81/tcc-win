@@ -59,12 +59,13 @@ predates C11/C23. The following functions are provided by tcc-win's runtime
 library (`libtcc1.a`, sources `lib/c23rt.c` and `lib/c23math.c`) and declared in the shipped
 headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 `timespec_get` and `TIME_UTC`). Tested by `tests/c23/c23_runtime.c` and
-`tests/c23/c23_math2.c` and `tests/c23/c23_math3.c`.
+`tests/c23/c23_math2.c`, `tests/c23/c23_math3.c` and `tests/c23/c23_aligned.c`.
 
 | Function(s) | Header | Notes |
 |---|---|---|
 | `memset_explicit`, `strndup` | `<string.h>` | `strdup` comes from msvcrt |
 | `memalignment` | `<stdlib.h>` | |
+| `aligned_alloc` (C11), `free_sized`, `free_aligned_sized` | `<stdlib.h>` | blocks are released by `free`/`realloc`, which C23 mode binds to wrappers; see [`aligned_alloc` and `free`](#aligned_alloc-and-free) |
 | `strfromd`, `strfromf`, `strfroml` | `<stdlib.h>` | formatted by msvcrt; infinities and NaNs are written as `inf`/`nan` (`INF`/`NAN`); `%a`/`%A` output is msvcrt's |
 | `gmtime_r`, `localtime_r`, `timegm` | `<time.h>` | via `_gmtime64_s`, `_localtime64_s`, `_mkgmtime64`; `time_t` is 32 bits on i386 |
 | `timespec_get` with `TIME_UTC` (C11), `timespec_getres` (C23) | `<time.h>` | `GetSystemTimePreciseAsFileTime` (Windows 8+), else `GetSystemTimeAsFileTime`; resolution reported as 100 ns |
@@ -84,6 +85,48 @@ headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 
 The `<math.h>` functions set neither `errno` nor the floating-point
 exception flags (the ones in this library; msvcrt's set `errno`) (`fromfpx` behaves like `fromfp`).
+
+### `aligned_alloc` and `free`
+
+msvcrt has no `aligned_alloc`, and memory from its `_aligned_malloc` cannot
+be released with `free`. tcc-win's `aligned_alloc` (`lib/c23rt.c`) therefore
+works on top of `malloc`:
+
+- an alignment up to what `malloc` already guarantees (8 on i386, 16 on
+  x86_64 and arm64) returns plain `malloc` memory;
+- a larger one over-allocates with `malloc` and returns an aligned pointer
+  inside that block, storing the size and the original pointer in a header
+  just before it. Such a pointer is recorded in a set of live aligned blocks
+  (a hash table protected by a spin lock);
+- a zero or non-power-of-two alignment returns `NULL`.
+
+In C23 mode `<stdlib.h>` and `<malloc.h>` declare `free` and `realloc` with
+asm labels, so calls (and their addresses, e.g. `fp = free`) bind to
+`__tcc_free` and `__tcc_realloc` in `libtcc1.a`. These look a pointer up in
+the set and pass anything not found there unchanged to msvcrt. The header is
+never trusted on its own, so ordinary `malloc` pointers cannot be mistaken
+for aligned blocks. The cost for them is one load and branch while no aligned
+block is live, otherwise an alignment test and, for suitably aligned
+pointers, a table lookup under the lock. `realloc` of an aligned block
+returns ordinary `malloc` memory (C allows that; the alignment is not kept).
+`free_sized` and `free_aligned_sized` ignore their size and alignment
+arguments and call `__tcc_free`. `-D__TCC_MSVCRT_FREE` keeps msvcrt's
+`free`/`realloc` and hides these three functions.
+
+This was chosen over the alternatives because it is the only one that keeps
+plain `free` correct: `_aligned_malloc` needs `_aligned_free`, and a
+header tag alone (without the set) would read bytes that belong to the heap
+before every ordinary pointer and could, however rarely, match them.
+
+Not supported (heap corruption or a crash, as with `_aligned_malloc`):
+a block with alignment above 8 (i386) / 16 (x86_64, arm64) released by
+code that does not use the wrappers: code compiled with `-std=c11`/`c17` or
+`-D__TCC_MSVCRT_FREE`, code that declares `free` itself without including
+`<stdlib.h>`/`<malloc.h>`, other compilers' objects, msvcrt itself, or
+another DLL/EXE (each module linked with `libtcc1.a` has its own set, so
+aligned blocks must be freed in the module that allocated them). msvcrt's
+`_msize`, `_expand`, `_recalloc` and `_aligned_free` do not accept them
+either. In C11/C17 mode `aligned_alloc` is not declared.
 
 ### `printf` family: `%b` / `%B`
 
@@ -116,9 +159,6 @@ macro is available (the decimal floating-point ones are not required, as
 
 ## Library: gaps
 
-These are not declared and not available:
-
-| Function(s) | Standard |
-|---|---|
-| `free_sized`, `free_aligned_sized` | C23; not provided together with `aligned_alloc` (below) |
-| `aligned_alloc` | C11; memory from msvcrt's `_aligned_malloc` cannot be released with `free`, so a compatible version needs its own allocator |
+None remain: `aligned_alloc`, `free_sized` and `free_aligned_sized`, the
+last ones listed here, are now provided (with the limits described in
+[`aligned_alloc` and `free`](#aligned_alloc-and-free)).
