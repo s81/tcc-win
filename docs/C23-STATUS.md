@@ -112,7 +112,8 @@ pointers, a table lookup under the lock. `realloc` of an aligned block
 returns ordinary `malloc` memory (C allows that; the alignment is not kept).
 `free_sized` and `free_aligned_sized` ignore their size and alignment
 arguments and call `__tcc_free`. `-D__TCC_MSVCRT_FREE` keeps msvcrt's
-`free`/`realloc` and hides these three functions.
+`free`/`realloc` and hides these three functions; `-b` (bounds checking) does the
+same, because the bounds checker hooks `free`/`realloc` itself.
 
 This was chosen over the alternatives because it is the only one that keeps
 plain `free` correct: `_aligned_malloc` needs `_aligned_free`, and a

@@ -59,6 +59,11 @@ extern "C" {
 #define _CRT_ALLOCATION_DEFINED
   void *__cdecl calloc(size_t _NumOfElements,size_t _SizeOfElements);
   /* tcc-win: free() takes ownership of its argument (see docs/OWNERSHIP.md) */
+#if defined(__TCC_BCHECK__) && !defined(__TCC_MSVCRT_FREE)
+  /* -b: the bounds checker hooks free/realloc itself, so they must not be
+     rebound to the aligned_alloc wrappers (and aligned_alloc is not declared) */
+# define __TCC_MSVCRT_FREE
+#endif
 #if __STDC_VERSION__ >= 202311L && !defined(__TCC_MSVCRT_FREE)
   /* C23: free and realloc also accept aligned_alloc memory: they are bound
      to wrappers in libtcc1.a (lib/c23rt.c, docs/C23-STATUS.md).
