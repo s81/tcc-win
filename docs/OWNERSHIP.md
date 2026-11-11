@@ -44,7 +44,9 @@ Each attribute can also be written with the vendor prefix (`[[tcc::owner]]`,
 (`__attribute__((owner))`, `__attribute__((borrow))`,
 `__attribute__((borrow_mut))`), which also works with `-std=c11`.
 
-Only **local variables and parameters of pointer type** are tracked. A
+Only **local variables and parameters of pointer type** are tracked, plus
+the elements of local arrays of owners (see *Arrays of owners*) and
+`[[owner]]` struct members (see *Owners inside structs*). A
 `[[borrow]]` must point to a `const` type, so that C itself rejects writes
 through it. The macro `__TCC_OWNERSHIP__` and `__has_c_attribute(owner)`,
 `__has_c_attribute(borrow)`, `__has_c_attribute(borrow_mut)` are defined
@@ -64,6 +66,8 @@ Each owner is in one of the states *owned*, *moved* (also: uninitialized),
   `[[owner]] char *b = a;`
 - argument for a parameter declared `[[owner]]`: `free(a);`
 - operand of `return`: `return a;`
+
+`*p = x` writes through `p`; it does not assign `p` (no overwrite check).
 
 **Null.** An owner that is *null* need not be released. An owner is null
 when it is initialized or assigned with a null constant (`nullptr`, `0`,
@@ -185,6 +189,8 @@ line of the last one in the source is given.
 | `owner 'p' still owns a resource at 'return' / at end of scope (leak)` | missing release |
 | `owner 'p' possibly still owns a resource at ...` | released on some paths only |
 | `owner 'p' is moved inside a loop` | would be moved again in the next iteration |
+| `owner 'p->f' still owns a resource at release of 'p' (leak)` | `free(p)` while a field of `*p` still owns what it got in this function |
+| `owner field 'p->f' left moved when 'p' is moved` | `*p` is handed on (returned, moved) with a dangling field |
 | `cannot move owner 'p' while it is borrowed by 'v'` | release or transfer while a pointer to it is held |
 | `cannot move owner 'p' while it is borrowed by an argument of the same call` | e.g. `consume(view(p), p)` style aliasing |
 | `cannot assign to 'p' while it is borrowed by 'v'` | the borrow would see a different object |
@@ -208,6 +214,47 @@ so an owner released before `continue` is "moved inside a loop" unless it
 gets a new value first. `break` and `continue` leave the loop body, so
 owners declared in it must be released or null there (like at `return`). A borrow assigned on
 different paths borrows from all of the possible sources.
+
+## Arrays of owners
+
+A local array whose element type is a pointer, declared `[[owner]]`, with
+a constant size of at most 16 elements, is tracked **element by
+element**: each element is an owner named `v[0]`, `v[1]`, ... with all
+the rules above (moves, null tests, leaks, use after move, overwrite,
+loops and control flow).
+
+```c
+[[owner]] char *v[3] = { malloc(4), malloc(8) };  // v[0], v[1] owned, v[2] null
+free(v[0]);
+[[owner]] char *p = v[1];       // moves v[1]
+v[1] = malloc(2);               // ok: v[1] was moved
+free(p);
+free(v[0]);                     // error: use of owner 'v[0]' after move
+return 0;                       // error: owner 'v[1]' still owns a resource at 'return'
+```
+
+Only an access with an **integer constant index** (`v[2]`, also from a
+macro) is tracked. Elements set by an initializer list are owned (or null
+for a null constant, and a plain owner name is moved into them);
+elements not mentioned in the list are null; without an initializer they
+are uninitialized.
+
+**Conservative rule.** Any other use of the array, i.e. an element access
+with a **non-constant index** (`v[i]`, also `v[N]` with an enumeration
+constant or `constexpr` name), the array itself as a value (`f(v)`,
+`memset(v, 0, sizeof v)`, `char **pp = v`) or `&v`, may change any
+element. From that point in the source on, **none of the elements of
+that array is checked any more**, on all paths, including the leak check
+at the end of its scope. This keeps the usual loops over the array
+(`for (i = 0; i < n; ++i) free(v[i]);`) free of false errors, but they are
+not verified. `sizeof v` and `sizeof v[i]` are not uses.
+
+Arrays with more than 16 elements, variable-length arrays, multi-dimensional
+arrays, `static` arrays, arrays of structs, `[[borrow]]` arrays and arrays
+whose elements would bring the number of variables tracked in the
+function above 48 are not tracked at all. An
+array parameter (`[[owner]] char *v[]`) is a pointer in C, so
+it is tracked as one owner of type `char **`.
 
 ## Owners inside structs
 
@@ -334,23 +381,85 @@ hands all its fields over: they are not checked any more, so a destructor
 that frees the object itself (`free(b->data); free(b);`) needs no `NULL`.
 Null tests of the pointer (`if (!b) return;`) do not hand anything over.
 
+**Through owner pointers.** The owner fields of the object an owner
+points to are tracked too: for `[[owner]] struct node *n` (a local
+variable or parameter), `n->data`, `n->next`, `n->in.data` are owners,
+and so are, through an `[[owner]]` member that points to such a struct,
+`n->next->data`, `s.head->data` (a member of a local struct variable) and
+`b->link->data` (behind a pointer parameter), up to four member names in
+all. They are tracked from their first use in the function, in an
+*unknown* state: owned, but not acquired in the function (`n` may come
+from `malloc()`, so its fields may be uninitialized). The checks are:
+
+- use after move: `free(n->data); n->data[0] = 0;` and double frees;
+- overwrite: assigning a field that got a resource in the function
+  (`n->data = malloc(1); n->data = malloc(2);`). The first assignment of a
+  field in the unknown state is accepted;
+- **leak at release**: passing `n` to an `[[owner]] void *` parameter
+  (`free(n)`) releases the object, but such a function cannot know its
+  fields. A field that got a resource in the function and still owns it
+  is an error; fields in the unknown state are not reported:
+
+```c
+[[owner]] struct node *n = malloc(sizeof *n);
+if (!n)
+    return;
+n->next = NULL;
+n->data = malloc(16);
+free(n);    // error: owner 'n->data' still owns a resource at release of 'n' (leak)
+```
+
+- **left moved**: when `n` is moved anywhere else (`return n;`,
+  `[[owner]] struct node *m = n;`, `node_free(n)` with an
+  `[[owner]] struct node *` parameter), the object lives on, so a field
+  that is moved must have got a new value first (as for pointer
+  parameters at `return`);
+- borrows: `free(n)` while a borrow of `n->data` is still used is
+  "cannot move owner 'n' while it is borrowed".
+
+Fields reached through an owner are never reported as leaks at the end
+of a scope or at `return`: the owner itself is (`n` still owns a
+resource), and whoever releases it is responsible for its fields.
+
+Everything that the checker cannot follow makes these fields *unknown*
+again, as on their first use (owned, not acquired in the function):
+
+- `n` gets a new value or is moved (the fields are those of another
+  object);
+- any use of the value of `n` other than `n->...`, e.g. `struct node *q
+  = n;`, `init(n)` (an unannotated or `[[borrow_mut]]` parameter),
+  `printf("%p", n)`, `*n = ...`, `n[0]`. A null test of `n` (`if (!n)`)
+  and passing `n` to a `[[borrow]]` parameter do not;
+- `&n->in` and assignments of whole struct members (`n->in = make()`);
+- a field first used inside an `if` without braces, a `switch` case or a
+  loop body after it (the merge at the end does not know it), or first
+  used inside a nested block (it is forgotten at the end of the block).
+
 Limitations of struct tracking:
 
-- Arrays are not tracked element by element: a local array of owners
-  (`[[owner]] char *v[8]`) is accepted but its elements are not checked
-  at all, and owner fields of struct array elements (`struct buf a[4]`, also as a
-  struct member) and of structs reached through other pointers
-  (`s.next->data`, `ps->next->data`, local pointer variables) are not
-  tracked. Releasing an array of owners takes a loop the checker cannot
-  verify, so keep such arrays in plain pointers and document who frees
-  them. Globals and statics are not tracked.
-- Fields more than four member names deep are not tracked.
+- Owner fields of struct array elements (`struct buf a[4]`, also as a
+  struct member), of array elements (`v[0]->data`), of structs reached
+  through plain (unannotated) pointers (`struct node *q = ...; q->data`,
+  `s.ptr->data` for a member without `[[owner]]`, `n->prev->data`) and
+  through borrows (`m->data` for a `[[borrow_mut]]` `m`) are not tracked.
+  Globals and statics are not tracked.
+- Fields more than four member names deep (counting the members after
+  `->` as well, e.g. `n->next->next->next->next->data`) are not tracked.
+- An `[[owner]]` function parameter of type `void *` is taken to release
+  the object without its fields (like `free()`); a reallocation function
+  declared that way (`[[owner]] void *p` in a `realloc` wrapper) gets
+  false "leak at release" errors.
+- A field reached through an owner is created on first use only while
+  fewer than 48 variables are tracked in the function; after that it is
+  not tracked.
 - `&s` releases all fields without checking (see above); a pointer taken
   with `&s` (`struct buf *ps = &s;`) is not connected to `s`.
 - Pointer parameters: copies of the pointer (`struct buf *q = b;`) are not
   connected to it, so `free(b->data); q->data = NULL;` is still reported
-  as left moved; `(*b).data` is not tracked. `[[owner]]`, `[[borrow]]`
-  and `[[borrow_mut]]` pointer parameters only track the pointer itself.
+  as left moved; `(*b).data` is not tracked. `[[borrow]]` and
+  `[[borrow_mut]]` pointer parameters only track the pointer itself;
+  `[[owner]]` pointer parameters also track the fields of the object (see
+  *Through owner pointers*).
 - Whole structs cannot be borrowed (`[[borrow]]` needs a pointer);
   `[[borrow]]` and `[[borrow_mut]]` struct members are not checked.
 - An initializer of the form `(struct buf){0}` or any other expression than
@@ -383,13 +492,15 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
 - At most 128 conflicts are pending per function; beyond that a conflict is
   reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.
-- Owners and borrows in globals, statics and arrays are not tracked; in
-  structs only `[[owner]]` fields of local struct variables, by-value
-  parameters and objects behind pointer parameters are (see *Owners inside
+- Owners and borrows in globals and statics are not tracked; arrays only
+  as described under *Arrays of owners* (constant indexes; any other use
+  stops the checking of the array); in structs only `[[owner]]` fields of
+  local struct variables, by-value parameters, objects behind pointer
+  parameters and objects reached through owners are (see *Owners inside
   structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
 - Return values of `[[owner]]` functions may be discarded silently.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
-  counts as one).
+  and array element counts as one).
