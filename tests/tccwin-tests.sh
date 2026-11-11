@@ -25,8 +25,8 @@ check_ok() { # dir file [flags]
     fi
 }
 
-check_ok "$top/tests/c23" c23_features.c
-check_ok "$top/tests/c23" c23_more.c
+check_ok "$top/tests/c23" c23_features.c -w  # uses [[deprecated]] entities
+check_ok "$top/tests/c23" c23_more.c -w
 check_ok "$top/tests/c23" c23_bitint.c
 check_ok "$top/tests/c23" c23_constexpr.c
 check_ok "$top/tests/c23" c23_audit_fixes.c -Wall
@@ -36,6 +36,21 @@ check_ok "$top/tests/c23" c23_printf_b.c -Wall
 check_ok "$top/tests/c23" c23_math2.c -Wall
 check_ok "$top/tests/c23" c23_math3.c -Wall
 check_ok "$top/tests/c23" c23_aligned.c -Wall
+check_ok "$top/tests/c23" c23_attrs_ok.c -Wall
+check_ok "$top/tests/c23" knr_c17.c "-std=c17 -Wall"
+# [[nodiscard]] / [[deprecated]] diagnostics (warnings, silenced by -w)
+out=$(cd "$top/tests/c23" && $TCC -c warn_attrs.c -o "$tmp/t.o" 2>&1)
+want="8: warning: ignoring return value of 'f' declared with attribute 'nodiscard'
+11: warning: ignoring return value of 'g' declared with attribute 'nodiscard'
+12: warning: 'h' is deprecated: use h2
+13: warning: 'OLD' is deprecated: old type
+13: warning: 'gv' is deprecated"
+if [ "$(echo "$out" | sed 's/^[^:]*:\([0-9]*:\)/\1/')" = "$want" ] \
+   && [ -z "$(cd "$top/tests/c23" && $TCC -w -c warn_attrs.c -o "$tmp/t.o" 2>&1)" ]; then
+    echo "ok   warn_attrs.c (nodiscard/deprecated warnings)"
+else
+    echo "FAIL warn_attrs.c: got: $out"; fail=1
+fi
 for f in "$top"/tests/ownership/ok_*.c; do
     check_ok "$top/tests/ownership" "$(basename "$f")"
 done

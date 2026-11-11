@@ -518,7 +518,9 @@ struct SymAttr {
     borrow      : 2, /* 1 [[borrow]], 2 [[borrow_mut]] (borrow checked) */
     cexpr_agg   : 1, /* C23 constexpr struct/union/array object */
     own_fields  : 1, /* struct/union: has [[owner]] members */
-    xxxx        : 12; /* not used */
+    deprecated  : 1, /* [[deprecated]] (message: see depr_msgs) */
+    nodiscard   : 1, /* struct/union/enum tag declared [[nodiscard]] */
+    xxxx        : 10; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */
@@ -531,7 +533,8 @@ struct FuncAttr {
     func_dtor   : 1, /* attribute((destructor)) */
     func_args   : 8, /* PE __stdcall args */
     func_alwinl : 1, /* always_inline */
-    xxxx        : 15;
+    xxxx        : 14,
+    func_nodiscard : 1; /* [[nodiscard]] (high bit: typedef syms alias this word) */
 };
 
 /* symbol management */
@@ -685,6 +688,7 @@ typedef struct AttributeDef {
     Sym *cleanup_func;
     int alias_target; /* token */
     int asm_label; /* associated asm label */
+    int depr_msg; /* [[deprecated("msg")]]: message token (0: none) */
     char attr_mode; /* __attribute__((__mode__(...))) */
     char new_section; /* section is new */
 } AttributeDef;

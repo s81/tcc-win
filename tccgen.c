@@ -1188,6 +1188,40 @@ ST_FUNC void vpush_helper_func(int v)
     vpushsym(&func_old_type, external_helper_sym(v));
 }
 
+/* [[deprecated("msg")]]: message token per identifier */
+static int *depr_msgs;
+static int depr_nmsgs;
+
+static void depr_note(Sym *sym, AttributeDef *ad)
+{
+    int i = (sym->v & ~SYM_FIELD) - TOK_IDENT;
+    if (!ad->a.deprecated || i < 0)
+        return;
+    sym->a.deprecated = 1;
+    if (i >= depr_nmsgs) {
+        int n = (i + 64) & ~63;
+        depr_msgs = tcc_realloc(depr_msgs, n * sizeof(int));
+        memset(depr_msgs + depr_nmsgs, 0, (n - depr_nmsgs) * sizeof(int));
+        depr_nmsgs = n;
+    }
+    depr_msgs[i] = ad->depr_msg;
+}
+
+static void depr_warn(Sym *sym)
+{
+    int i = (sym->v & ~SYM_FIELD) - TOK_IDENT;
+    int m = i >= 0 && i < depr_nmsgs ? depr_msgs[i] : 0;
+    if (m)
+        tcc_warning("'%s' is deprecated: %s", get_tok_str(sym->v & ~SYM_FIELD, NULL),
+                    get_tok_str(m, NULL));
+    else
+        tcc_warning("'%s' is deprecated", get_tok_str(sym->v & ~SYM_FIELD, NULL));
+}
+
+/* result of the last call was a [[nodiscard]] one (cleared by any
+   operation that uses the value); used for expression statements */
+static int nd_call;
+
 /* Merge symbol attributes.  */
 static void merge_symattr(struct SymAttr *sa, struct SymAttr *sa1)
 {
@@ -1219,6 +1253,8 @@ static void merge_funcattr(struct FuncAttr *fa, struct FuncAttr *fa1)
       fa->func_args = fa1->func_args;
     if (fa1->func_noreturn)
       fa->func_noreturn = 1;
+    if (fa1->func_nodiscard)
+      fa->func_nodiscard = 1;
     if (fa1->func_ctor)
       fa->func_ctor = 1;
     if (fa1->func_dtor)
@@ -1320,6 +1356,7 @@ static void patch_storage(Sym *sym, AttributeDef *ad, CType *type)
             get_tok_str(sym->v, NULL));
 #endif
     merge_symattr(&sym->a, &ad->a);
+    depr_note(sym, ad);
     if (ad->asm_label)
         sym->asm_label = ad->asm_label;
     update_storage(sym);
@@ -1390,6 +1427,8 @@ static Sym *external_sym(int v, CType *type, int r, AttributeDef *ad)
         s = global_identifier_push(v, type->t, 0);
         s->r |= r;
         s->a = ad->a;
+        s->a.deprecated = 0;
+        depr_note(s, ad);
         s->asm_label = ad->asm_label;
         s->type.ref = type->ref;
     } else {
@@ -3210,6 +3249,7 @@ ST_FUNC void gen_op(int op)
     CType type1, combtype;
     int op_class = op;
 
+    nd_call = 0;
     if (((vtop[-1].type.t | vtop[0].type.t) & VT_BITINT) && gen_op_bitint(op))
         return;
 
@@ -3425,6 +3465,7 @@ static void gen_cast(CType *type)
     int sbt, dbt, sf, df, c;
     int dbt_bt, sbt_bt, ds, ss, bits, trunc;
 
+    nd_call = 0;
     if (((type->t | vtop->type.t) & VT_BITINT) && gen_cast_bitint(type))
         return;
 
@@ -3890,6 +3931,7 @@ ST_FUNC void vstore(void)
 {
     int sbt, dbt, ft, r, size, align, bit_size, bit_pos, delayed_cast;
 
+    nd_call = 0;
     ft = vtop[-1].type.t;
     sbt = vtop->type.t & VT_BTYPE;
     dbt = ft & VT_BTYPE;
@@ -5487,11 +5529,25 @@ static int parse_c23_attribute(AttributeDef *ad)
             ad->a.borrow = OWN_SHARED;
         else if (!strcmp(name, "borrow_mut") || !strcmp(name, "__borrow_mut__"))
             ad->a.borrow = OWN_MUT;
-        else if (t && strcmp(name, "deprecated") && strcmp(name, "fallthrough")
-            && strcmp(name, "maybe_unused") && strcmp(name, "nodiscard")
+        else if (!strcmp(name, "nodiscard") || !strcmp(name, "__nodiscard__"))
+            ad->f.func_nodiscard = ad->a.nodiscard = 1;
+        else if (!strcmp(name, "deprecated") || !strcmp(name, "__deprecated__")) {
+            ad->a.deprecated = 1;
+            ad->depr_msg = 0;
+            if (tok == '(') { /* optional message */
+                next();
+                if (tok == TOK_STR)
+                    ad->depr_msg = tok_alloc_const(parse_mult_str("deprecation message")->data);
+                else if (tok != ')')
+                    expect("string literal");
+                skip(')');
+            }
+        }
+        else if (t && strcmp(name, "fallthrough")
+            && strcmp(name, "maybe_unused")
             && strcmp(name, "unsequenced") && strcmp(name, "reproducible")
-            && strcmp(name, "__deprecated__") && strcmp(name, "__fallthrough__")
-            && strcmp(name, "__maybe_unused__") && strcmp(name, "__nodiscard__"))
+            && strcmp(name, "__fallthrough__")
+            && strcmp(name, "__maybe_unused__"))
             tcc_warning_c(warn_unsupported)("'%s' attribute ignored", name);
         if (tok == '(') { /* skip balanced argument tokens */
             int parenthesis = 0;
@@ -6141,6 +6197,8 @@ static void struct_decl(CType *type, int u)
 do_decl:
     type->t = s->type.t;
     type->ref = s;
+    if (ad.a.nodiscard)
+        s->a.nodiscard = 1;
 
     if (tok == '{') {
         next();
@@ -6686,6 +6744,8 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
                 t |= VT_BT_ARRAY;
             /* get attributes from typedef */
             sym_to_attr(ad, s);
+            if (s->a.deprecated)
+                depr_warn(s);
             typespec_found = 1;
             st = bt = -2;
             break;
@@ -6795,8 +6855,11 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
             --local_scope;
 	    merge_attr (ad, &ad1);
 	    return 0;
-	} else
+	} else {
+	  if (tcc_state->cversion >= 202311)
+	    tcc_error("old-style (K&R) function definitions are not allowed in C23 (use -std=c17 or lower)");
 	  l = FUNC_OLD;
+	}
 
         first = NULL;
         plast = &first;
@@ -7420,6 +7483,7 @@ ST_FUNC void unary(void)
     if (debug_modes)
         tcc_debug_line(tcc_state), tcc_tcov_check_line (tcc_state, 1);
 
+    nd_call = 0;
     type.ref = NULL;
     /* XXX: GCC 2.95.3 does not generate a table although it should be
        better here */
@@ -8064,6 +8128,8 @@ special_math_val:
             s = external_global_sym(t, &func_old_type);
         }
 
+        if (s->a.deprecated)
+            depr_warn(s);
         if (s->a.owner || s->a.borrow || own_addrof
             || (own_n && (own_is_sv(s) || own_is_psv_type(&s->type))))
             own_use(s);
@@ -8155,6 +8221,7 @@ special_math_val:
             SValue ret;
             Sym *sa;
             int nb_args, ret_nregs, ret_align, regsize, variadic;
+            Sym *callee;
             TokenString *p, *p2;
             struct own_call ocall;
 
@@ -8174,6 +8241,8 @@ special_math_val:
             }
             /* get return type */
             s = vtop->type.ref;
+            callee = (vtop->r & (VT_VALMASK|VT_LVAL|VT_SYM)) == (VT_CONST|VT_SYM)
+                ? vtop->sym : NULL;
             next();
             sa = s->next; /* first parameter */
             nb_args = regsize = 0;
@@ -8344,6 +8413,14 @@ special_math_val:
                     vtop->type.t = VT_INT;
 #endif
                 }
+            }
+            {
+                int bt = s->type.t & VT_BTYPE;
+                nd_call = 0;
+                if (s->f.func_nodiscard
+                    || (s->type.ref && (bt == VT_STRUCT || IS_ENUM(s->type.t))
+                        && s->type.ref->a.nodiscard))
+                    nd_call = callee ? callee->v : -1;
             }
             if (s->f.func_noreturn) {
                 if (debug_modes)
@@ -9580,7 +9657,12 @@ again:
                     vpop();
                     gexpr();
                 } else {
+                    nd_call = 0;
                     gexpr();
+                    if (nd_call)
+                        tcc_warning("ignoring return value of '%s' declared with attribute 'nodiscard'",
+                            nd_call > 0 ? get_tok_str(nd_call, NULL) : "function");
+                    nd_call = 0;
                     vpop();
                 }
                 skip(';');
@@ -10520,6 +10602,8 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 	    }
 
             sym->a = ad->a;
+            sym->a.deprecated = 0;
+            depr_note(sym, ad);
         } else {
             /* push local reference */
             vset(type, r, addr);
@@ -11173,6 +11257,8 @@ static int decl(int l)
                         sym = sym_push(v, &type, 0, 0);
                     }
                     sym->a = ad.a;
+                    sym->a.deprecated = 0;
+                    depr_note(sym, &ad);
                     if ((type.t & VT_BTYPE) == VT_FUNC)
                       merge_funcattr(&sym->type.ref->f, &ad.f);
                     if (debug_modes)

@@ -19,16 +19,16 @@ C17. It is not exhaustive: optional features (decimal floating point
 | `auto` type inference, `typeof`, `typeof_unqual` | |
 | `bool`, `true`, `false`, `alignas`, `alignof`, `static_assert`, `thread_local` as keywords | `true`/`false` have type `bool` |
 | `static_assert` without a message | |
-| `[[deprecated]]`, `[[fallthrough]]`, `[[maybe_unused]]`, `[[nodiscard]]`, `[[noreturn]]`, `[[unsequenced]]`, `[[reproducible]]` | also `[[__name__]]` spellings, `__has_c_attribute` |
+| `[[deprecated]]`, `[[fallthrough]]`, `[[maybe_unused]]`, `[[nodiscard]]`, `[[noreturn]]`, `[[unsequenced]]`, `[[reproducible]]` | also `[[__name__]]` spellings, `__has_c_attribute`; `nodiscard` and `deprecated("msg")` give warnings (default on, `-w` silences) |
 | empty initializer `= {}` | |
 | enums with a fixed underlying type, enumerators wider than `int` | |
 | unnamed parameters in function definitions | |
 | labels before declarations | |
 | `static` / `constexpr` compound literals | |
-| `f()` means `f(void)`; `f(...)`; `va_start(ap)` | old-style definitions removed |
+| `f()` means `f(void)`; `f(...)`; `va_start(ap)` | old-style (K&R) definitions are an error (accepted with `-std=c17` or lower) |
 | binary literals, digit separators `'` | |
 | `u8` character constants | type `unsigned char`; one UTF-8 code unit |
-| `_BitInt(N)`, `wb`/`uwb` suffixes | `BITINT_MAXWIDTH` is 64, the minimum C23 requires |
+| `_BitInt(N)`, `wb`/`uwb` suffixes | `BITINT_MAXWIDTH` is 64, the minimum C23 requires; N > 64 is not feasible in the single-pass code generator |
 | `#elifdef`, `#elifndef`, `#warning`, `__VA_OPT__`, `__has_include` | |
 | `#embed` with `limit`, `prefix`, `suffix`, `if_empty`; `__has_embed` | the resource name may come from a macro |
 | tag compatibility: an identical redefinition of a struct, union or enum in the same scope (N3037) | a different one is an error |

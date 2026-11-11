@@ -116,19 +116,19 @@ test.ref: tcctest.c
 # auto test
 test1 test1b: tcctest.c test.ref
 	@echo ------------ $@ ------------
-	$(TCC) $(RUN_TCC) -w -run $< > test.out1
+	$(TCC) $(RUN_TCC) -w -std=c17 -run $< > test.out1
 	@diff -u test.ref test.out1 && echo "$(AUTO_TEST) OK"
 
 # iterated test2 (compile tcc then compile tcctest.c !)
 test2 test2b: tcctest.c test.ref
 	@echo ------------ $@ ------------
-	$(TCC) $(RUN_TCC) $(RUN_TCC) -w -run $< > test.out2
+	$(TCC) $(RUN_TCC) $(RUN_TCC) -w -std=c17 -run $< > test.out2
 	@diff -u test.ref test.out2 && echo "$(AUTO_TEST)2 OK"
 
 # iterated test3 (compile tcc then compile tcc then compile tcctest.c !)
 test3 test3b: tcctest.c test.ref
 	@echo ------------ $@ ------------
-	$(TCC) $(RUN_TCC) $(RUN_TCC) $(RUN_TCC) -w -run $< > test.out3
+	$(TCC) $(RUN_TCC) $(RUN_TCC) $(RUN_TCC) -w -std=c17 -run $< > test.out3
 	@diff -u test.ref test.out3 && echo "$(AUTO_TEST)3 OK"
 
 AUTO_TEST = Auto Test
@@ -139,23 +139,23 @@ test%b : AUTO_TEST = Auto Bound-Test
 test4: tcctest.c test.ref
 	@echo ------------ $@ ------------
 # object + link output
-	$(TCC) -c -o tcctest3.o $<
+	$(TCC) -std=c17 -c -o tcctest3.o $<
 	$(TCC) -o tcctest3 tcctest3.o
 	./tcctest3 > test3.out
 	@if diff -u test.ref test3.out ; then echo "Object $(AUTO_TEST) OK"; fi
 # dynamic output
-	$(TCC) -o tcctest1 $<
+	$(TCC) -std=c17 -o tcctest1 $<
 	./tcctest1 > test1.out
 	@if diff -u test.ref test1.out ; then echo "Dynamic $(AUTO_TEST) OK"; fi
 # dynamic output + bound check
-	$(TCC) -b -o tcctest4 $<
+	$(TCC) -std=c17 -b -o tcctest4 $<
 	./tcctest4 > test4.out
 	@if diff -u test.ref test4.out ; then echo "BCheck $(AUTO_TEST) OK"; fi
 
 test4_static: tcctest.c test.ref
 	@echo ------------ $@ ------------
 # static output.
-	$(TCC) -static -o tcctest2 $<
+	$(TCC) -std=c17 -static -o tcctest2 $<
 	./tcctest2 > test2.out
 	@if diff -u test.ref test2.out ; then echo "Static $(AUTO_TEST) OK"; fi
 
@@ -178,7 +178,7 @@ memtest:
 	@echo ------------ $@ ------------
 	$(CC) $(CFLAGS) -DMEM_DEBUG=2 $(TOPSRC)/tcc.c $(LIBS) -o memtest-tcc$(EXESUF)
 	./memtest-tcc$(EXESUF) $(TCCFLAGS) $(TOPSRC)/tcc.c $(LIBS)
-	./memtest-tcc$(EXESUF) $(TCCFLAGS) -run $(TOPSRC)/tcc.c $(TCCFLAGS) -w $(TOPSRC)/tests/tcctest.c
+	./memtest-tcc$(EXESUF) $(TCCFLAGS) -run $(TOPSRC)/tcc.c $(TCCFLAGS) -w -std=c17 $(TOPSRC)/tests/tcctest.c
 	@echo OK
 
 # memory and bound check auto test
@@ -221,7 +221,7 @@ speedtest: ex2 ex3
 
 weaktest: tcctest.c test.ref
 	@echo ------------ $@ ------------
-	$(TCC) -c $< -o weaktest.tcc.o
+	$(TCC) -std=c17 -c $< -o weaktest.tcc.o
 	$(CC) -c $< -o weaktest.gcc.o $(CFLAGS) -w -O0 -std=gnu99 -fno-omit-frame-pointer
 	objdump -t weaktest.tcc.o | grep ' w ' | sed -e 's/.* \([a-zA-Z0-9_]*\)$$/\1/' | LC_ALL=C sort > weaktest.tcc.o.txt
 	objdump -t weaktest.gcc.o | grep ' w ' | sed -e 's/.* \([a-zA-Z0-9_]*\)$$/\1/' | LC_ALL=C sort > weaktest.gcc.o.txt
@@ -304,7 +304,7 @@ CROSS-TGTS = \
 define CROSS-COMPILE
  @echo " . $(1)"
  $(TCC) $(DEF-$1) -DTCC_CROSS_TEST -run $(TOPSRC)/tcc.c \
-    -c $(if $(findstring c67,$1),$(filter %/ex3.c,$^),$<) -w $(TCCFLAGS)
+    -c $(if $(findstring c67,$1),$(filter %/ex3.c,$^),$<) -w -std=c17 $(TCCFLAGS)
 
 endef
 

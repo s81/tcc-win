@@ -10,3 +10,4 @@ err_constexpr_assign.c cannot modify a member of a constexpr object
 err_tag_redef.c redefinition of 'T' with different content
 err_enum_redef.c redefinition of 'E' with different content
 err_u8_multi.c u8 character constant must be a single code unit
+err_knr.c old-style (K&R) function definitions are not allowed in C23
