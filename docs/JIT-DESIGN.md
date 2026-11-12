@@ -648,6 +648,19 @@ One commit per item, tests first. Items 1 - 3 and 8 do not depend on 4 - 7.
    `decimal`, GCC black box when available. TestFloat, MPFR, Paranoia and
    Csmith need their licenses confirmed and a toolchain to build.
 
+### Decisions taken (2026-11-13)
+
+Approved by the owner as proposed:
+
+1. No reference compiler; the fallback GATE of section 5 applies.
+2. Functions containing a loop may compile up to 15 % slower; loop-free code stays within noise.
+3. Images above 2 GiB are rejected with a clear error.
+4. The FP fixes of 3.6 are done in Phase 2, although they change AOT output for the affected inputs.
+5. No reciprocal-table methods in the decimal library; lower speed accepted.
+6. Decimal input through `strto*` only; no `scanf` wrapper.
+7. `_Decimal32/64` ABI stays open until GCC can be probed; Stage L uses structs and does not depend on it.
+8. Oracles: IBM test cases and decNumber (ICU License), Python `decimal`, GCC as a black box when available.
+
 ## 10. Not verified in this phase
 
 - Anything about GCC, MSVC or clang output, including the MinGW decimal ABI,

@@ -14,14 +14,17 @@ mkdir "%S%"
 call .\build-tcc.bat -clean >nul
 call .\build-tcc.bat -c "%SEED%" -t x86_64 > "%S%stage1.log" 2>&1
 echo stage1 exit=%ERRORLEVEL%
+if errorlevel 1 type "%S%stage1.log" & exit /b 1
 xcopy /s /i /q /y . "%S%stage1" >nul
 call .\build-tcc.bat -clean >nul
 call .\build-tcc.bat -c "%S%stage1\tcc.exe" -t x86_64 > "%S%stage2.log" 2>&1
 echo stage2 exit=%ERRORLEVEL%
+if errorlevel 1 type "%S%stage2.log" & exit /b 1
 xcopy /s /i /q /y . "%S%stage2" >nul
 call .\build-tcc.bat -clean >nul
 call .\build-tcc.bat -c "%S%stage2\tcc.exe" -t x86_64 > "%S%stage3.log" 2>&1
 echo stage3 exit=%ERRORLEVEL%
+if errorlevel 1 type "%S%stage3.log" & exit /b 1
 set RC=0
 for %%f in (tcc.exe libtcc.dll lib\libtcc1.a) do (
   fc /b %%f "%S%stage2\%%f" >nul && (echo %%f: stage 2 == stage 3, %%~zf bytes) || (echo %%f DIFFERS between stage 2 and stage 3& set RC=1)
