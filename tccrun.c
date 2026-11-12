@@ -435,7 +435,8 @@ static void cleanup_sections(TCCState *s1)
 static int tcc_relocate_ex(TCCState *s1, void *ptr, unsigned ptr_diff)
 {
     Section *s;
-    unsigned offset, length, align, i, k, f;
+    addr_t offset; /* 64-bit: catch images that do not fit */
+    unsigned length, align, i, k, f;
     unsigned n, copy;
     addr_t mem, addr;
 
@@ -540,8 +541,12 @@ redo:
         }
     }
 
-    if (0 == mem)
+    if (0 == mem) {
+        if (offset > 0x7fffffff - PAGESIZE)
+            return tcc_error_noabort("in-memory image of %u MiB exceeds 2 GiB",
+                (unsigned)(offset >> 20));
         return PAGEALIGN(offset);
+    }
 
     if (++copy == 2) {
         goto redo;

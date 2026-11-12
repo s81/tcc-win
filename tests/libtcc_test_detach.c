@@ -1,7 +1,7 @@
 /*
  * libtcc: detached code (tcc_detach / tcc_code_symbol / tcc_code_free),
  * release of the run image, page protection, and no memory growth over
- * repeated compile/unload cycles.
+ * repeated compile/unload cycles, and rejection of images over 2 GiB.
  *
  * usage: libtcc_test_detach [-Bdir] [-Idir] [-Ldir] ...
  */
@@ -15,12 +15,14 @@
 
 static int argc_, fails, nerr;
 static char **argv_;
+static char last_err[256];
 
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } } while (0)
 
 static void on_err(void *quiet, const char *msg)
 {
     nerr++;
+    snprintf(last_err, sizeof last_err, "%s", msg);
     if (!quiet)
         fprintf(stderr, "%s\n", msg);
 }
@@ -185,6 +187,34 @@ int main(int argc, char **argv)
             mode ? "detach" : "delete", (unsigned)(grown / 1024));
         CHECK(grown < 1024 * 1024); /* the old leak was 4 KB per cycle */
 #endif
+    }
+
+    /* 6. images over 2 GiB are rejected with a message, not silently */
+    {
+        static const char *big[] = {
+            /* static: bss, rejected while compiling */
+            "static char a[1500u << 20], b[1500u << 20];\n"
+            "int f(void) { return a[0] + b[0]; }\n",
+            /* -fcommon: placed in bss while linking; 4.5 GiB would wrap 32 bits */
+            "char a[1500u << 20], b[1500u << 20], c[1500u << 20];\n"
+            "int f(void) { return a[0] + b[0] + c[0]; }\n",
+            /* two sections under 2 GiB each: caught when sizing the run image */
+            "static char a[1500u << 20];\n"
+            "__attribute__((section(\".bss2\"))) static char b[1500u << 20];\n"
+            "int f(void) { return a[0] + b[0]; }\n",
+        };
+        for (i = 0; i < 3; i++) {
+            int rc;
+            s = mk(1, i == 1 ? "-fcommon" : NULL);
+            nerr = 0, last_err[0] = 0;
+            rc = tcc_compile_string(s, big[i]);
+            if (rc == 0)
+                rc = tcc_relocate(s);
+            CHECK(rc == -1);
+            CHECK(nerr >= 1 && strstr(last_err, "2 GiB"));
+            printf("big image %d: %s\n", i, last_err);
+            tcc_delete(s);
+        }
     }
 
     if (fails)

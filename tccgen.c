@@ -11008,6 +11008,9 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
             size = size + 1; /* add padding */
 #endif
         if (sec) {
+            /* PE images and in-memory images are limited to 2 GiB */
+            if ((addr_t)sec->data_offset + size + align > 0x7fffffff)
+                tcc_error("section '%s' would exceed 2 GiB", sec->name);
 	    addr = section_add(sec, size, align);
         } else {
             addr = align; /* SHN_COMMON is special, symbol value is align */

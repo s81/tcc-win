@@ -1,0 +1,6 @@
+_ftelli64 3
+ftello64 3
+_fseeki64 0 5368709243
+fseeko64 0 1
+fgetpos 1
+GetFileSizeEx 1 3

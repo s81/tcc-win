@@ -76,6 +76,9 @@ endif
 ifneq (-$(ARCH)-$(CONFIG_WIN32)-,-arm64-yes-)
  SKIP += 145_winarm64_interlocked.test
 endif
+ifneq (-$(CONFIG_WIN32)-,-yes-)
+ SKIP += 154_stream64.test # Windows file APIs
+endif
 
 # Some tests might need arguments
 ARGS =
