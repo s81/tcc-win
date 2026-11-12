@@ -99,7 +99,7 @@ Only warnings: `tcc.h:66: warning: snprintf redefined`, `tcc.h:67: warning: vsnp
 
 | Suite | Command | Result |
 |---|---|---|
-| C23 + ownership | `TCC="sh tcc-retry.sh" RUN=1 sh tests/tccwin-tests.sh` | `ok=104 fail=0`, "all tcc-win tests passed" |
+| C23 + ownership | `TCC="sh $PWD/tests/jitbench/tcc-retry.sh" RUN=1 sh tests/tccwin-tests.sh` | `ok=104 fail=0`, "all tcc-win tests passed" |
 | tests2 | replay of `tests/tests2/Makefile` (x86_64-win32 flags) | `pass=131 fail=0 skip=12` |
 | pp | replay of `tests/pp/Makefile` | `pass=24 fail=0` |
 | hello-exe, hello-run, vla_test, asm-c-connect, dlltest, btest | replay of `tests/Makefile` | ok |
@@ -111,8 +111,13 @@ Only warnings: `tcc.h:66: warning: snprintf redefined`, `tcc.h:67: warning: vsnp
 | tcctest vs gcc (`test3`), abitest-cc | need gcc | **unverified** |
 
 tests2 skips are the Makefile's own: `34 98 99 106 114 117 148 138 139 140 141 145`.
-The replay scripts (`bootstrap.cmd`, `tcc-retry.sh`, `suites.sh`) live in the
-session scratch directory, not in the repository.
+The replay scripts are in the repository:
+
+```
+> tests\jitbench\bootstrap.cmd C:\tools\tcc\tcc.exe          (3-stage build, exit 1 if stage 2 != stage 3)
+$ TCC="sh $PWD/tests/jitbench/tcc-retry.sh" RUN=1 sh tests/tccwin-tests.sh
+$ sh tests/jitbench/suites.sh                                (tests2, pp, Makefile targets; exit 1 on any failure)
+```
 
 ## 3. Compile latency and memory (goal 1b, 1c, 3b)
 
@@ -168,6 +173,10 @@ mode=run cycles=100000 unexpected=0 errors_reported=0  1651.8 us/cycle
 | ok (relocate) | +414,288 KB | 4.14 KB | constant (81) |
 | run (`tcc_run`) | +414,496 KB | 4.14 KB | constant (81) |
 | err (compile error) | +1,132 KB, flat after the first 10,000 | ~0 | constant (81) |
+
+`jitbench cycles` exits 1 and prints `LEAK` when private bytes grow by more
+than 1 MiB between the first checkpoint (10 % of the cycles) and the end, so
+today `ok` and `run` fail and `err` passes.
 
 Cause, confirmed by `jitbench outlive`:
 
@@ -486,7 +495,7 @@ Values below are baselines measured here; "proposed" entries need approval.
 
 | Goal | Baseline | Proposed target |
 |---|---|---|
-| R1 time | `C + n*t` per kernel, section 6 | no kernel above baseline + noise (3 % on C, 6 % on t) at n = 0, 64 KiB, 1 MiB, 64 MiB, 4.5 GiB |
+| R1 time | `C + n*t` per kernel, section 6 | no kernel above baseline + noise (3 % on C, 6 % on t) at n = 1 MiB, 64 MiB and 1024 MiB (the sizes `jitbench kern` can run; it takes whole MiB and two buffers), plus n = 0, which is the compile time C alone |
 | R1 memory | 1.6 MB peak private (1 KLOC); 137 KB/KLOC | not above baseline + 5 % |
 | R2 | formula in section 6; `s` and `dC` unknown | tier threshold = n* computed per kernel once an optimizer exists |
 | 1a | gap to reference: **unknown** | cannot be set without a reference compiler (decision 1 below) |

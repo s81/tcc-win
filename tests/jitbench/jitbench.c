@@ -145,6 +145,7 @@ static int cmd_cycles(int argc, char **argv)
         "int g(void) { return 1 +; }\n";
     PMC_EX m;
     DWORD h;
+    SIZE_T warm = 0, grown;
     double t0 = now();
     /* not in tcc-win's kernel32.def */
     BOOL (WINAPI *GetProcessHandleCount)(HANDLE, DWORD *) =
@@ -159,6 +160,8 @@ static int cmd_cycles(int argc, char **argv)
                 (unsigned long long)m.WorkingSetSize / 1024,
                 (unsigned long long)m.PrivateUsage / 1024, h, now() - t0);
             fflush(stdout);
+            if (!warm && i)
+                warm = m.PrivateUsage; /* first checkpoint after warm-up */
         }
         if (i == n)
             break;
@@ -177,9 +180,14 @@ static int cmd_cycles(int argc, char **argv)
         }
         tcc_delete(s);
     }
+    mem(&m);
+    grown = m.PrivateUsage > warm ? m.PrivateUsage - warm : 0;
     printf("mode=%s cycles=%d unexpected=%d errors_reported=%d  %.1f us/cycle\n",
         mode, n, bad, nb_err, (now() - t0) * 1e6 / n);
-    return bad != 0;
+    /* goal 4: no growth after warm-up; 1 MiB allows for heap noise (the real leak is 4 KB per cycle) */
+    printf("growth after warm-up: %llu KB -> %s\n", (unsigned long long)grown / 1024,
+        grown > 1024 * 1024 ? "LEAK" : "ok");
+    return bad != 0 || grown > 1024 * 1024;
 }
 
 /* ------------------------------------------------------------------ */
@@ -382,6 +390,9 @@ static int cmd_reloc(int argc, char **argv)
         set(77);
         printf("%s: get()=%d *v=%d -> %s\n", t, get(), *v, get() == 77 && *v == 77 ? "OK" : "WRONG");
     } else if (!strcmp(t, "farfunc")) {
+#ifndef __x86_64__ /* the far function below is x86-64 machine code */
+        return printf("%s: skipped (x86-64 only)\n", t), 0;
+#endif
         int (*call)(int);
         /* x86-64 only: "lea eax,[rcx+1000]; ret" placed far above the image */
         static const unsigned char far_code[] = { 0x8D, 0x81, 0xE8, 0x03, 0x00, 0x00, 0xC3 };
