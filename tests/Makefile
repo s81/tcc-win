@@ -13,6 +13,7 @@ TESTS = \
  hello-run \
  libtest \
  libtest_mt \
+ libtest_detach \
  test3 \
  abitest \
  asm-c-connect-test \
@@ -102,6 +103,9 @@ libtcc_test$(EXESUF): libtcc_test.c
 	$(CC) -o $@ $< $(CFLAGS) $(-LTCC) $(LIBS)
 
 libtcc_test_mt$(EXESUF): libtcc_test_mt.c
+	$(CC) -o $@ $< $(CFLAGS) $(-LTCC) $(LIBS)
+
+libtcc_test_detach$(EXESUF): libtcc_test_detach.c
 	$(CC) -o $@ $< $(CFLAGS) $(-LTCC) $(LIBS)
 
 %-dir:
@@ -328,7 +332,7 @@ clean:
 	rm -f *~ *.o *.a *.bin *.i *.ref *.out *.out? *.out?b *.cc *.gcc
 	rm -f *-cc *-gcc *-tcc *.exe hello libtcc_test vla_test tcctest[1234]
 	rm -f asm-c-connect asm-c-connect-sep
-	rm -f ex? tcc_g weaktest.*.txt *.def *.pdb *.obj libtcc_test_mt
+	rm -f ex? tcc_g weaktest.*.txt *.def *.pdb *.obj libtcc_test_mt libtcc_test_detach
 	@$(MAKE) -C tests2 $@
 	@$(MAKE) -C pp $@
 

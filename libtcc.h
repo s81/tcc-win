@@ -98,6 +98,20 @@ LIBTCCAPI void *tcc_get_symbol(TCCState *s, const char *name);
 LIBTCCAPI void tcc_list_symbols(TCCState *s, void *ctx,
     void (*symbol_cb)(void *ctx, const char *name, const void *val));
 
+/* code that outlives its compilation context (see libtcc_test_detach.c) */
+typedef struct TCCCode TCCCode;
+
+/* after tcc_relocate(): move the code out of the state, which can then be
+   deleted. Returns NULL and reports an error before tcc_relocate() or when
+   -bt or -b is used (their runtime support needs the state). */
+LIBTCCAPI TCCCode *tcc_detach(TCCState *s);
+
+/* address of a global symbol of detached code, or NULL if not found */
+LIBTCCAPI void *tcc_code_symbol(TCCCode *code, const char *name);
+
+/* unload detached code; NULL is allowed */
+LIBTCCAPI void tcc_code_free(TCCCode *code);
+
 /* experimental/advanced section (see libtcc_test_mt.c for an example) */
 
 /* catch runtime exceptions (optionally limit backtraces at top_func),

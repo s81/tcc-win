@@ -173,40 +173,143 @@ LIBTCCAPI int tcc_relocate(TCCState *s1)
     return ret;
 }
 
+static void rt_free_dll(void *handle)
+{
+#ifdef _WIN32
+    FreeLibrary((HMODULE)handle);
+#else
+    dlclose(handle);
+#endif
+}
+
+/* unregister unwind data, then unmap or unprotect and free the run image */
+static void rt_release(void *ptr, unsigned size, void *function_table)
+{
+#ifdef _WIN64
+    win64_del_function_table(function_table);
+#endif
+#ifdef CONFIG_SELINUX
+    munmap(ptr, size);
+#elif CONFIG_RUNMEM_VIRTUALALLOC
+    VirtualFree(ptr, 0, MEM_RELEASE); /* MEM_RELEASE requires size 0 */
+#else
+    /* unprotect memory to make it usable for malloc again */
+    protect_pages((void*)PAGEALIGN(ptr), size - PAGESIZE, 2 /*rw*/);
+    tcc_free(ptr);
+#endif
+}
+
 ST_FUNC void tcc_run_free(TCCState *s1)
 {
-    unsigned size;
-    void *ptr;
     int i;
 
     /* free any loaded DLLs */
     for ( i = 0; i < s1->nb_loaded_dlls; i++) {
         DLLReference *ref = s1->loaded_dlls[i];
         if ( ref->handle )
-#ifdef _WIN32
-            FreeLibrary((HMODULE)ref->handle);
-#else
-            dlclose(ref->handle);
-#endif
+            rt_free_dll(ref->handle);
     }
-    /* unmap or unprotect and free memory */
-    ptr = s1->run_ptr;
-    if (NULL == ptr)
+    if (NULL == s1->run_ptr)
         return;
     st_unlink(s1);
-#ifdef _WIN64
-    win64_del_function_table(s1->run_function_table);
+    rt_release(s1->run_ptr, s1->run_size, s1->run_function_table);
+}
+
+/* ------------------------------------------------------------- */
+/* code that outlives the TCCState */
+
+typedef struct TCCCodeSym { const char *name; void *addr; } TCCCodeSym;
+
+struct TCCCode {
+    void *ptr;              /* run image */
+    unsigned size;
+    void *function_table;   /* registered unwind data */
+    int nb_dlls, nb_syms;
+    void **dlls;            /* modules loaded for this code */
+    TCCCodeSym *syms;       /* global symbols, sorted by name */
+    char leading_underscore;
+};
+
+static int code_sym_cmp(const void *a, const void *b)
+{
+    return strcmp(((const TCCCodeSym *)a)->name, ((const TCCCodeSym *)b)->name);
+}
+
+LIBTCCAPI TCCCode *tcc_detach(TCCState *s1)
+{
+    Section *s = s1->symtab;
+    ElfW(Sym) *sym, *end;
+    TCCCode *c;
+    char *str;
+    int nd = 0, ns = 0, i;
+    size_t strsize = 0;
+
+    if (NULL == s1->run_ptr)
+        return tcc_error_noabort("tcc_detach: code is not relocated"), NULL;
+    if (s1->do_backtrace
+#ifdef CONFIG_TCC_BCHECK
+        || s1->do_bounds_check
 #endif
-    size = s1->run_size;
-#ifdef CONFIG_SELINUX
-    munmap(ptr, size);
-#elif CONFIG_RUNMEM_VIRTUALALLOC
-    VirtualFree(ptr, size, MEM_RELEASE);
-#else
-    /* unprotect memory to make it usable for malloc again */
-    protect_pages((void*)PAGEALIGN(ptr), size - PAGESIZE, 2 /*rw*/);
-    tcc_free(ptr);
-#endif
+        )
+        return tcc_error_noabort("tcc_detach: not supported with -bt or -b"), NULL;
+
+    end = (ElfW(Sym) *)(s->data + s->data_offset);
+    for (sym = (ElfW(Sym) *)s->data + 1; sym < end; sym++)
+        if (sym->st_shndx != SHN_UNDEF && ELFW(ST_BIND)(sym->st_info) != STB_LOCAL)
+            ns++, strsize += strlen((char *)s->link->data + sym->st_name) + 1;
+    for (i = 0; i < s1->nb_loaded_dlls; i++)
+        nd += !!s1->loaded_dlls[i]->handle;
+
+    /* one block: header, dll handles, symbols, names */
+    c = tcc_mallocz(sizeof *c + nd * sizeof(void *) + ns * sizeof(TCCCodeSym) + strsize);
+    c->dlls = (void **)(c + 1);
+    c->syms = (TCCCodeSym *)(c->dlls + nd);
+    str = (char *)(c->syms + ns);
+    for (sym = (ElfW(Sym) *)s->data + 1; sym < end; sym++)
+        if (sym->st_shndx != SHN_UNDEF && ELFW(ST_BIND)(sym->st_info) != STB_LOCAL) {
+            const char *name = (char *)s->link->data + sym->st_name;
+            c->syms[c->nb_syms].name = strcpy(str, name);
+            c->syms[c->nb_syms++].addr = (void *)(uintptr_t)sym->st_value;
+            str += strlen(name) + 1;
+        }
+    qsort(c->syms, c->nb_syms, sizeof(TCCCodeSym), code_sym_cmp);
+    for (i = 0; i < s1->nb_loaded_dlls; i++)
+        if (s1->loaded_dlls[i]->handle)
+            c->dlls[c->nb_dlls++] = s1->loaded_dlls[i]->handle, s1->loaded_dlls[i]->handle = NULL;
+
+    c->ptr = s1->run_ptr, c->size = s1->run_size;
+    c->function_table = s1->run_function_table;
+    c->leading_underscore = s1->leading_underscore;
+    st_unlink(s1);
+    s1->run_ptr = NULL, s1->run_size = 0, s1->run_function_table = NULL;
+    /* the state no longer has code: empty its symbol table */
+    s->data_offset = s->link->data_offset = s->hash->data_offset = 0;
+    init_symtab(s);
+    return c;
+}
+
+LIBTCCAPI void *tcc_code_symbol(TCCCode *c, const char *name)
+{
+    char buf[256];
+    TCCCodeSym key, *r;
+    if (!c || !name)
+        return NULL;
+    if (c->leading_underscore && !strchr(name, '@')) /* as get_sym_addr() */
+        buf[0] = '_', pstrcpy(buf + 1, sizeof buf - 1, name), name = buf;
+    key.name = name;
+    r = bsearch(&key, c->syms, c->nb_syms, sizeof key, code_sym_cmp);
+    return r ? r->addr : NULL;
+}
+
+LIBTCCAPI void tcc_code_free(TCCCode *c)
+{
+    int i;
+    if (!c)
+        return;
+    for (i = 0; i < c->nb_dlls; i++)
+        rt_free_dll(c->dlls[i]);
+    rt_release(c->ptr, c->size, c->function_table);
+    tcc_free(c);
 }
 
 #define RT_EXIT_ZERO 0xE0E00E0E /* passed from longjmp instead of '0' */
@@ -320,6 +423,8 @@ static void cleanup_sections(TCCState *s1)
 #ifndef CONFIG_RUNMEM_RO
 # ifdef __APPLE__
 #   define CONFIG_RUNMEM_RO 1
+# elif defined _WIN32
+#   define CONFIG_RUNMEM_RO 2 /* W^X: code never writable */
 # else
 #   define CONFIG_RUNMEM_RO 0
 #  endif
