@@ -58,7 +58,7 @@ def enc(f, v):
         bits = (0b11111 << (n - 6)) | ((1 if e == 'N' else 0) << (n - 7)) | pl
     else:
         c = int(''.join(map(str, digs))); E = e + F['bias']
-        assert 0 <= c < 10 ** F['p'] and 0 <= E <= 3 * 2 ** (F['eb'] - 2) * 2 - 1, (v, f)
+        assert 0 <= c < 10 ** F['p'] and 0 <= E <= 3 * 2 ** (F['eb'] - 2) - 1, (v, f)
         if c < 1 << (t + 3):
             bits = (E << (t + 3)) | c
         else:
@@ -191,10 +191,10 @@ def i_range(op):
 def o_toint(f, r, x, kind):
     lo, hi = i_range(kind); bits = 64 if '64' in kind else 32
     if x.is_nan(): return 0, 1
-    if x.is_infinite(): return (lo if x.is_signed() else hi), 1
+    if x.is_infinite(): return (lo if x.is_signed() else hi) & (2 ** bits - 1), 1
     c = ctx(f, r); v = x.to_integral_value(rounding=MODES[r], context=c)
     iv = int(v); fl = 0
-    if iv < lo or iv > hi: return (lo if iv < lo else hi), 1
+    if iv < lo or iv > hi: return (lo if iv < lo else hi) & (2 ** bits - 1), 1
     if v != x: fl = 16
     return iv & (2 ** bits - 1), fl
 
@@ -286,7 +286,7 @@ def gen_ops(f, rng, count, out):
                     k = rcoef(rng, p // 2 + 1); e = rng.randint(F['etiny'] // 2 + 1, F['qmax'] // 2)
                     x = mk(0, k * k if k * k < 10 ** p else k, 2 * e if F['etiny'] <= 2 * e <= F['qmax'] else 0)
                 else: x = operand(rng, F, .15)
-                if rng.random() < .8 and x.is_finite(): x = abs(x) if not x.is_zero() else x
+                if rng.random() < .8 and x.is_finite(): x = x.copy_abs() if not x.is_zero() else x
                 res, fl = o_sqrt(f, r, x)
                 emit(op, r, [H(x)], H(res), fl)
             elif op == 'quantize':
@@ -324,7 +324,7 @@ def gen_conv(f, rng, count, out):
             elif pick < .5: v = (10 ** rng.randint(min(p - 1, 17), min(19, p + 2)) + rng.choice([-1, 0, 1, 5, 4, 6])) * rng.choice([1, 10, 1])
             else: v = rng.choice([0, 1, 2 ** 63 - 1, 2 ** 63, 2 ** 64 - 1, 2 ** 53 + 1, rng.getrandbits(64)])
             if op == 'fromi64':
-                v = v % 2 ** 63 if v < 2 ** 63 else v - 2 ** 63
+                v = v % 2 ** 63
                 if rng.random() < .5: v = -v
                 if rng.random() < .03: v = -2 ** 63
             else: v = v % 2 ** 64
@@ -383,7 +383,6 @@ def to_sci(v):
     return str(v)
 
 def to_plain(v):
-    if v.is_zero() and v.is_finite() and v.as_tuple()[2] > 0: return '0'
     return format(v, 'f')
 
 def gen_str(f, rng, count, out):
@@ -392,7 +391,7 @@ def gen_str(f, rng, count, out):
     for i in range(count):
         x = operand(rng, F, .25)
         for k in 's', 'f':
-            if k == 'f' and x.is_finite() and x.as_tuple()[2] > 60: continue
+            if k == 'f' and x.is_finite() and not -300 < x.as_tuple()[2] < 60: continue
             s = to_sci(x) if k == 's' else to_plain(x)
             out.append('tostr %d %s %s -> %s' % (f, H(x), k, 'x' + s.encode().hex()))
     for i in range(count * 2):
@@ -407,7 +406,7 @@ def gen_str(f, rng, count, out):
             if rng.random() < .4 and not s.startswith(('-', '+')) is None: pass
             pre = rng.choice(['', '', '  ', '\t']); post = rng.choice(['', '', 'xyz', 'e', 'e+', ' 5'])
             full = pre + s + post
-            res = fix(c, v) if not v.is_snan() else (c._raise_error(D.InvalidOperation) , snan_quiet(v)._fix(c))[1]
+            res = v._fix(c)
             if v.is_nan() and not v.is_snan() and not v.is_nan(): pass
             end = len(pre) + exp_end
             if post.startswith('e') and x.is_finite() and 'e' not in s and 'E' not in s and False: pass

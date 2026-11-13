@@ -67,7 +67,7 @@ static int unhex(const char *h, char *out, int max)
 #define X_TU32(P, U, R) ((V){{tcc_##P##_to_u32(U(a), c), 0}})
 #define X_TDBL(P, U, R) ((V){{d2bits(tcc_##P##_to_double(U(a), c)), 0}})
 #define X_TFLT(P, U, R) ((V){{f2bits(tcc_##P##_to_float(U(a), c)), 0}})
-#define X_FSTR(P, U, R) R(tcc_##P##_from_string(str, &endp, c))
+#define X_FSTR(P, U, R) R(tcc_##P##_from_string(str, endp, c))
 #define X_TSTR(P, U, R) tcc_##P##_to_string(buf, sizeof buf, U(a), fmt)
 
 static double bits2d(uint64_t b) { double d; memcpy(&d, &b, 8); return d; }
@@ -134,7 +134,7 @@ int main(int argc, char **argv)
             n = BYW(w, X_TSTR);
             unhex(tok[arrow + 1] + 1, out, sizeof out - 1);
             ok = (n == (int)strlen(out) && !strcmp(buf, out));
-            if (!ok && nfail < (unsigned long)maxfail) printf("FAIL line %lu tostr %d: got \"%s\" want \"%s\"\n", lineno, w, buf, out);
+            if (!ok && nfail < (unsigned long)maxfail) printf("FAIL line %lu tostr %d: got len %d want len %d, got \"%.60s\" want \"%.60s\" tails \"%s\" \"%s\"\n", lineno, w, n, (int)strlen(out), buf, out, strlen(buf) > 30 ? buf + strlen(buf) - 30 : buf, strlen(out) > 30 ? out + strlen(out) - 30 : out);
             count("tostr", w, ok); continue;
         }
         r = atoi(tok[2]); cx.rounding = r; cx.flags = 0;
