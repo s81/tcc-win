@@ -2442,6 +2442,261 @@ static void bn_zero(unsigned int *bn)
     }
 }
 
+/* ---- floating point literals, correctly rounded for every input ----
+   The conversion is done here with integer arithmetic so that the result
+   depends neither on the host's strtod/long double nor on double rounding.
+   Formats: 0 = binary32, 1 = binary64. Results are the IEEE bit patterns. */
+
+/* big unsigned integer, little endian 32 bit words (at most ~4800 bits are
+   needed: 1024 digits and a decimal exponent in [-1424, 400]) */
+#define BIG_W 176
+typedef struct { unsigned int w[BIG_W]; int n; } Big;
+
+static void big_muladd(Big *a, unsigned int m, unsigned int add)
+{
+    unsigned long long c = add;
+    int i;
+    for (i = 0; i < a->n; i++) {
+        c += (unsigned long long)a->w[i] * m;
+        a->w[i] = (unsigned int)c;
+        c >>= 32;
+    }
+    if (c)
+        a->w[a->n++] = (unsigned int)c;
+}
+
+static int big_bits(const Big *a)
+{
+    int n = a->n, b = 0;
+    unsigned int t;
+    if (!n)
+        return 0;
+    for (t = a->w[n - 1]; t; t >>= 1)
+        b++;
+    return (n - 1) * 32 + b;
+}
+
+static void big_shl(Big *a, int k)
+{
+    int ws = k / 32, bs = k % 32, i;
+    if (!a->n)
+        return;
+    a->w[a->n + ws] = 0;
+    for (i = a->n - 1; i >= 0; i--) {
+        unsigned int v = a->w[i];
+        if (bs)
+            a->w[i + ws + 1] |= v >> (32 - bs); /* top word starts zero */
+        a->w[i + ws] = v << bs;
+    }
+    for (i = 0; i < ws; i++)
+        a->w[i] = 0;
+    a->n += ws + 1;
+    while (a->n && !a->w[a->n - 1])
+        a->n--;
+}
+
+static void big_shr1(Big *a)
+{
+    int i;
+    for (i = 0; i < a->n; i++)
+        a->w[i] = a->w[i] >> 1 | (i + 1 < a->n ? a->w[i + 1] << 31 : 0);
+    while (a->n && !a->w[a->n - 1])
+        a->n--;
+}
+
+static int big_cmp(const Big *a, const Big *b)
+{
+    int i;
+    if (a->n != b->n)
+        return a->n < b->n ? -1 : 1;
+    for (i = a->n - 1; i >= 0; i--)
+        if (a->w[i] != b->w[i])
+            return a->w[i] < b->w[i] ? -1 : 1;
+    return 0;
+}
+
+static void big_sub(Big *a, const Big *b) /* a -= b, a >= b */
+{
+    long long c = 0;
+    int i;
+    for (i = 0; i < a->n; i++) {
+        c += (long long)a->w[i] - (i < b->n ? b->w[i] : 0);
+        a->w[i] = (unsigned int)c;
+        c >>= 32;
+    }
+    while (a->n && !a->w[a->n - 1])
+        a->n--;
+}
+
+/* the 64 bits of 'a' starting at bit 'lo'; *sticky |= any lower bit set */
+static uint64_t big_bits_at(const Big *a, int lo, int *sticky)
+{
+    int wi = lo / 32, bo = lo % 32, i;
+    uint64_t q;
+    unsigned int w[3];
+    for (i = 0; i < 3; i++)
+        w[i] = wi + i < a->n ? a->w[wi + i] : 0;
+    q = ((uint64_t)w[1] << 32 | w[0]) >> bo;
+    if (bo)
+        q |= (uint64_t)w[2] << (64 - bo);
+    if (bo && (a->w[wi] & ((1u << bo) - 1)))
+        *sticky = 1;
+    for (i = 0; i < wi && i < a->n; i++)
+        if (a->w[i])
+            *sticky = 1;
+    return q;
+}
+
+/* the value q * 2^(e - bits(q) + 1), plus a tiny positive amount when
+   'sticky', rounded to nearest even in format 'fmt'; q != 0, and q has at
+   least p + 2 bits whenever sticky is set (callers guarantee it) */
+static uint64_t fp_round(uint64_t q, int e, int sticky, int fmt)
+{
+    int p = fmt ? 53 : 24, emin = fmt ? -1022 : -126, emax = fmt ? 1023 : 127;
+    uint64_t inf = fmt ? 0x7ff0000000000000ULL : 0x7f800000ULL;
+    uint64_t kept, bits, rnd = 0;
+    int lq = 0, drop;
+    if (e > emax)
+        return inf;
+    if (e < emin - 70)
+        return 0;
+    for (kept = q; kept; kept >>= 1)
+        lq++;
+    drop = lq - p + (e < emin ? emin - e : 0);
+    if (drop <= 0) {
+        kept = q << -drop;
+    } else if (drop > 64) {
+        kept = 0, sticky = 1;
+    } else {
+        kept = drop == 64 ? 0 : q >> drop;
+        rnd = q >> (drop - 1) & 1;
+        if (q & ((1ULL << (drop - 1)) - 1))
+            sticky = 1;
+    }
+    if (rnd && (sticky || (kept & 1)))
+        kept++;
+    bits = e >= emin ? ((uint64_t)(e - emin) << (p - 1)) + kept : kept;
+    return bits >= inf ? inf : bits;
+}
+
+/* nearest value to a big integer times 2^e2, 'sticky' = nonzero bits dropped
+   below it */
+static uint64_t big_to_fp(const Big *a, int e2, int sticky, int fmt)
+{
+    int lb = big_bits(a), lo = lb > 64 ? lb - 64 : 0;
+    uint64_t q;
+    if (!lb)
+        return 0;
+    q = big_bits_at(a, lo, &sticky);
+    return fp_round(q, lb - 1 + e2, sticky, fmt);
+}
+
+/* s = digits [. digits] [e [+-] digits] (no sign, no suffix) */
+static uint64_t dec_to_fp(const char *s, int fmt)
+{
+    static const double p10[] = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8,
+        1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
+        1e20, 1e21, 1e22 };
+    static const unsigned int u10[] = { 1, 10, 100, 1000, 10000, 100000,
+        1000000, 10000000, 100000000, 1000000000 };
+    const char *p;
+    unsigned long long d = 0;
+    int nd = 0, fd = 0, dot = 0, ex = 0, es = 1, e10, adj, m, k, i, nz, ez;
+
+    for (p = s;; p++) {
+        if (*p == '.') {
+            dot = 1;
+            continue;
+        }
+        if (*p < '0' || *p > '9')
+            break;
+        fd += dot;
+        if (nd || *p != '0') {
+            if (++nd <= 19)
+                d = d * 10 + (*p - '0');
+        }
+    }
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        if (*p == '-' || *p == '+')
+            es = *p++ == '-' ? -1 : 1;
+        for (; *p >= '0' && *p <= '9'; p++)
+            if (ex < 100000)
+                ex = ex * 10 + *p - '0';
+    }
+    if (!nd)
+        return 0;
+    e10 = es * ex - fd;
+#if !defined __i386__ && !defined _M_IX86 /* x87 would round twice */
+    nz = nd, ez = e10;
+    if (nd <= 19)
+        while (nz > 1 && d % 10 == 0)
+            d /= 10, nz--, ez++;
+    /* both the digits and the power of ten are exact: one IEEE operation */
+    if (fmt && nz <= 15 && ez >= -22 && ez <= 22) {
+        volatile double r = (double)(long long)d;
+        r = ez < 0 ? r / p10[-ez] : r * p10[ez];
+        memcpy(&d, (const void *)&r, 8);
+        return d;
+    }
+    if (!fmt && nz <= 7 && ez >= -10 && ez <= 10) {
+        volatile float r = (float)(long long)d;
+        r = ez < 0 ? r / (float)p10[-ez] : r * (float)p10[ez];
+        memcpy(&d, (const void *)&r, 4);
+        return (unsigned int)d;
+    }
+#endif
+    adj = nd + e10; /* value is in [10^(adj-1), 10^adj) */
+    if (adj > 400)
+        return fmt ? 0x7ff0000000000000ULL : 0x7f800000ULL;
+    if (adj < -400)
+        return 0;
+
+    {
+        Big a, b;
+        uint64_t q = 0;
+        int sticky = 0, j, p_ = fmt ? 53 : 24;
+
+        a.n = b.n = 0;
+        m = 0;
+        for (p = s, k = 0; (*p >= '0' && *p <= '9') || *p == '.'; p++) {
+            if (*p == '.')
+                continue;
+            m = m * 10 + *p - '0';
+            if (++k == 9)
+                big_muladd(&a, 1000000000u, m), m = k = 0;
+        }
+        big_muladd(&a, u10[k], m);
+        if (e10 >= 0) {
+            for (m = e10; m >= 9; m -= 9)
+                big_muladd(&a, 1000000000u, 0);
+            big_muladd(&a, u10[m], 0);
+            return big_to_fp(&a, 0, 0, fmt);
+        }
+        /* value = a / 10^-e10: build q = floor(a * 2^s / 10^-e10) with
+           p+3 or p+4 bits, and remember whether the division was exact */
+        b.w[0] = 1, b.n = 1;
+        for (m = -e10; m >= 9; m -= 9)
+            big_muladd(&b, 1000000000u, 0);
+        big_muladd(&b, u10[m], 0);
+        k = big_bits(&b) - big_bits(&a) + p_ + 3; /* a * 2^k / b in (2^(p+2), 2^(p+4)) */
+        if (k >= 0)
+            big_shl(&a, k);
+        else
+            big_shl(&b, -k);
+        big_shl(&b, p_ + 3);
+        for (j = p_ + 3; j >= 0; j--) {
+            if (big_cmp(&a, &b) >= 0)
+                big_sub(&a, &b), q |= 1ULL << j;
+            big_shr1(&b);
+        }
+        sticky = a.n != 0;
+        for (i = 0, j = 0; (q >> i) != 0; i++)
+            j = i; /* index of the top bit */
+        return fp_round(q, j - k, sticky, fmt);
+    }
+}
+
 /* parse number in null terminated string 'p' and return it in the
    current token */
 static void parse_number(const char *p)
@@ -2450,6 +2705,7 @@ static void parse_number(const char *p)
     char *q;
     unsigned int bn[BN_SIZE];
     long double d;
+    int hsticky = 0;
 
     /* number */
     q = token_buf;
@@ -2519,7 +2775,9 @@ static void parse_number(const char *p)
                 } else {
                     t = t - '0';
                 }
-                frac_bits -= bn_lshift(bn, shift, t);
+                s = bn_lshift(bn, shift, t);
+                frac_bits -= s;
+                hsticky |= s && t;
             }
             if (ch == '.') {
                 ch = *p++;
@@ -2536,7 +2794,9 @@ static void parse_number(const char *p)
                     }
                     if (t >= b)
                         tcc_error("invalid digit");
-                    frac_bits -= bn_lshift(bn, shift, t);
+                    s = bn_lshift(bn, shift, t);
+                    frac_bits -= s;
+                    hsticky |= s && t;
                     frac_bits += shift;
                     ch = *p++;
                 }
@@ -2562,26 +2822,47 @@ static void parse_number(const char *p)
             }
             exp_val = exp_val * s;
 
-            /* now we can generate the number */
-            /* XXX: should patch directly float number */
-            d = (long double)bn[3] * 79228162514264337593543950336.0L +
-	        (long double)bn[2] * 18446744073709551616.0L +
-	        (long double)bn[1] * 4294967296.0L +
-	        (long double)bn[0];
-            d = ldexpl(d, exp_val - frac_bits);
-            t = toup(ch);
-            if (t == 'F') {
-                ch = *p++;
-                tok = TOK_CFLOAT;
-                /* float : should handle overflow */
-                tokc.f = (float)d;
-            } else if (t == 'L') {
-                ch = *p++;
-                tok = TOK_CLDOUBLE;
-                tokc.ld = d;
-            } else {
-                tok = TOK_CDOUBLE;
-                tokc.d = (double)d;
+            /* now we can generate the number: bn * 2^(exp_val - frac_bits),
+               rounded once to the destination format */
+            {
+                Big big;
+                int i2;
+                uint64_t fb;
+                for (i2 = 0; i2 < BN_SIZE; i2++)
+                    big.w[i2] = bn[i2];
+                big.n = BN_SIZE;
+                while (big.n && !big.w[big.n - 1])
+                    big.n--;
+                t = toup(ch);
+                if (t == 'F') {
+                    unsigned int u;
+                    ch = *p++;
+                    tok = TOK_CFLOAT;
+                    u = (unsigned int)big_to_fp(&big, exp_val - frac_bits, hsticky, 0);
+                    memcpy(&tokc.f, &u, 4);
+                } else {
+                    fb = big_to_fp(&big, exp_val - frac_bits, hsticky, 1);
+                    if (t == 'L') {
+                        ch = *p++;
+                        tok = TOK_CLDOUBLE;
+#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+                        {
+                            double dd;
+                            memcpy(&dd, &fb, 8);
+                            tokc.ld = dd;
+                        }
+#else
+                        d = (long double)bn[3] * 79228162514264337593543950336.0L +
+                            (long double)bn[2] * 18446744073709551616.0L +
+                            (long double)bn[1] * 4294967296.0L +
+                            (long double)bn[0];
+                        tokc.ld = ldexpl(d, exp_val - frac_bits);
+#endif
+                    } else {
+                        tok = TOK_CDOUBLE;
+                        memcpy(&tokc.d, &fb, 8);
+                    }
+                }
             }
         } else {
             /* decimal floats */
@@ -2622,16 +2903,27 @@ static void parse_number(const char *p)
             t = toup(ch);
             errno = 0;
             if (t == 'F') {
+                unsigned int u = (unsigned int)dec_to_fp(token_buf, 0);
                 ch = *p++;
                 tok = TOK_CFLOAT;
-                tokc.f = strtof(token_buf, NULL);
+                memcpy(&tokc.f, &u, 4);
             } else if (t == 'L') {
                 ch = *p++;
                 tok = TOK_CLDOUBLE;
+#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+                {
+                    uint64_t u = dec_to_fp(token_buf, 1);
+                    double dd;
+                    memcpy(&dd, &u, 8);
+                    tokc.ld = dd;
+                }
+#else
                 tokc.ld = strtold(token_buf, NULL);
+#endif
             } else {
+                uint64_t u = dec_to_fp(token_buf, 1);
                 tok = TOK_CDOUBLE;
-                tokc.d = strtod(token_buf, NULL);
+                memcpy(&tokc.d, &u, 8);
             }
         }
     } else {
