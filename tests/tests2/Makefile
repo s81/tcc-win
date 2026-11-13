@@ -78,6 +78,7 @@ ifneq (-$(ARCH)-$(CONFIG_WIN32)-,-arm64-yes-)
 endif
 ifneq (-$(CONFIG_WIN32)-,-yes-)
  SKIP += 154_stream64.test # Windows file APIs
+ SKIP += 156_tls_dll.test # Windows DLLs
 endif
 
 # Some tests might need arguments
@@ -139,6 +140,13 @@ GEN-ALWAYS =
     $(TCC) -bt $1 -shared -D DLL=1 -o a1$(DLLSUF) && \
     $(TCC) -bt $1 -shared -D DLL=2 -o a2$(DLLSUF) && \
     $(TCC) -bt $1 a1$(DLLSUF) a2$(DLLSUF) -Wl,-rpath=. -o $*.exe && \
+    ./$*.exe
+
+# TLS in DLLs: one DLL is linked, a copy of it is loaded by LoadLibrary
+156_tls_dll.test: T1 = \
+    $(TCC) $1 -shared -D DLL=1 -o 156a1$(DLLSUF) && \
+    $(TCC) $1 -shared -D DLL=1 -o 156a2$(DLLSUF) && \
+    $(TCC) $1 156a1$(DLLSUF) -o $*.exe && \
     ./$*.exe
 
 114_bound_signal.test: FLAGS += -b

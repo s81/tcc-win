@@ -40,6 +40,9 @@ for c in "$SRC"/??_*.c "$SRC"/???_*.c; do
     113_btdll)
         $TCC -bt "$c" -shared -D DLL=1 -o a1.dll && $TCC -bt "$c" -shared -D DLL=2 -o a2.dll &&
         $TCC -bt "$c" a1.dll a2.dll -Wl,-rpath=. -o $n.exe && ./$n.exe ;;
+    156_tls_dll)
+        $TCC "$c" -shared -D DLL=1 -o 156a1.dll && $TCC "$c" -shared -D DLL=1 -o 156a2.dll &&
+        $TCC "$c" 156a1.dll -o $n.exe && ./$n.exe ;;
     146_tls_extern)
         $TCC -c "$c" -o $n-main.o && $TCC -c "$c" -DDEFS -o $n-defs.o &&
         $TCC -no-pie -Wl,-z,noexecstack $n-main.o $n-defs.o -o $n.exe && ./$n.exe ;;
