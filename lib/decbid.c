@@ -1108,6 +1108,185 @@ static int to_string(const fmt *f, const num *x, char *buf, size_t n, const char
     return e.len;
 }
 
+/* ------------------------------------------------------------ 5b
+   Fast paths for decimal32 and decimal64 (coefficients below 10^16 fit one
+   limb).  They handle the common case - finite nonzero operands, exact
+   results or results needing a plain rounding step, exponent in the normal
+   range - with 64-bit arithmetic, and return 0 *before touching the context*
+   whenever anything else is involved (zero, NaN, infinity, subnormal or
+   overflowing result, wide intermediates); the caller then runs the general
+   path.  Both paths give identical results (tests/decimal/vectors.txt). */
+
+double sqrt(double);
+
+static int dig64(u64 x)                  /* x != 0 */
+{
+    int g = DG[64 - clz64(x)];
+    return x >= P10[g] ? g + 1 : g;
+}
+
+static int fin64(const fmt *f, u64 v, int *s, int *e, u64 *c)
+{
+    int n = f->n, t = f->t;
+    u64 top5 = (v >> (n - 6)) & 31, ex, cf;
+    if (top5 >= 30) return 0;
+    *s = (int)((v >> (n - 1)) & 1);
+    if ((top5 >> 3) != 3) {
+        ex = (v >> (t + 3)) & ((1ULL << f->eb) - 1); cf = v & ((1ULL << (t + 3)) - 1);
+    } else {
+        ex = (v >> (t + 1)) & ((1ULL << f->eb) - 1); cf = (v & ((1ULL << (t + 1)) - 1)) | (1ULL << (t + 3));
+    }
+    if (cf >= f->lim[0] || ex > (u64)(f->qmax + f->bias)) return 0;
+    *e = (int)ex - f->bias; *c = cf;
+    return 1;
+}
+
+static u64 pk64(const fmt *f, int s, int e, u64 c)
+{
+    int n = f->n, t = f->t;
+    u64 ex = (u64)(e + f->bias), v;
+    if (c < (1ULL << (t + 3))) v = (ex << (t + 3)) | c;
+    else v = (3ULL << (n - 3)) | (ex << (t + 1)) | (c & ((1ULL << (t + 1)) - 1));
+    return v | ((u64)s << (n - 1));
+}
+
+/* (h:l) *= 10^k; 0 on overflow of 128 bits */
+static int mul128_p10(u64 *h, u64 *l, int k)
+{
+    while (k > 0) {
+        int s = k > 19 ? 19 : k;
+        u64 h1, l1, h2, l2;
+        l1 = mul64(*l, P10[s], &h1);
+        l2 = mul64(*h, P10[s], &h2);
+        if (h2 || h1 + l2 < h1) return 0;
+        *l = l1; *h = h1 + l2;
+        k -= s;
+    }
+    return 1;
+}
+
+/* round (-1)^sign (h:l) 10^e (nonzero; plus sticky) to the format; 0 = leave to the general path */
+static int fast_round2(const fmt *f, tcc_dec_ctx *cx, int sign, int e, u64 h, u64 l, int sticky, u64 *out)
+{
+    int nd, k, cls = 0, inexact = 0;
+    u64 q;
+    if (!h) { if (!l) return 0; nd = dig64(l); }
+    else {
+        int g = DG[128 - clz64(h)];
+        u64 th = 0, tl = 1;
+        if (g > 38 || !mul128_p10(&th, &tl, g)) return 0;
+        nd = (h > th || (h == th && l >= tl)) ? g + 1 : g;
+    }
+    k = nd - f->p;
+    if (k < 0) k = 0;
+    if (k > 19 || f->etiny - e > k || e + k > f->qmax || e + nd < f->etiny + f->p) return 0;
+    q = l;
+    if (k) {
+        u64 d = P10[k], r, half = 5 * P10[k - 1];
+        if (h) { if (h >= d) return 0; q = div128(h, l, d, &r); }
+        else { q = l / d; r = l - q * d; }
+        cls = r == 0 ? 0 : r < half ? 1 : r == half ? 2 : 3;
+        if (sticky) cls = cls == 0 ? 1 : cls == 2 ? 3 : cls;
+        e += k;
+        if (cls) {
+            inexact = 1;
+            if (roundup(cx->rounding, sign, (int)(q & 1), cls)) {
+                q++;
+                if (q == f->lim[0]) { q = f->lim1[0]; e++; if (e > f->qmax) return 0; }
+            }
+        }
+    }
+    if (inexact) cx->flags |= TCC_DEC_INEXACT;
+    *out = pk64(f, sign, e, q);
+    return 1;
+}
+
+static int fast_round(const fmt *f, tcc_dec_ctx *cx, int sign, int e, u64 q, int sticky, u64 *out)
+{
+    return fast_round2(f, cx, sign, e, 0, q, sticky, out);
+}
+
+static int fast_add(const fmt *f, tcc_dec_ctx *cx, u64 a, u64 b, int neg, u64 *out)
+{
+    int sa, sb, ea, eb, d, sign, t; u64 ca, cb, X, S, hi, tc;
+    if (!fin64(f, a, &sa, &ea, &ca) || !fin64(f, b, &sb, &eb, &cb)) return 0;
+    sb ^= neg;
+    if (!ca || !cb) return 0;
+    if (ea < eb) { t = sa; sa = sb; sb = t; t = ea; ea = eb; eb = t; tc = ca; ca = cb; cb = tc; }
+    d = ea - eb;
+    if (d > 19) return 0;
+    X = mul64(ca, P10[d], &hi);
+    if (hi) return 0;
+    if (sa == sb) { S = X + cb; if (S < X) return 0; sign = sa; }
+    else if (X > cb) { S = X - cb; sign = sa; }
+    else if (X < cb) { S = cb - X; sign = sb; }
+    else return 0;
+    return fast_round(f, cx, sign, eb, S, 0, out);
+}
+
+static int fast_mul(const fmt *f, tcc_dec_ctx *cx, u64 a, u64 b, u64 *out)
+{
+    int sa, sb, ea, eb; u64 ca, cb, hi, lo;
+    if (!fin64(f, a, &sa, &ea, &ca) || !fin64(f, b, &sb, &eb, &cb) || !ca || !cb) return 0;
+    lo = mul64(ca, cb, &hi);
+    return fast_round2(f, cx, sa ^ sb, ea + eb, hi, lo, 0, out);
+}
+
+static void strip64(u64 *q, int *e, int ideal)
+{
+    static const int J[5] = { 16, 8, 4, 2, 1 };
+    int i;
+    for (i = 0; i < 5; i++)
+        if (*e + J[i] <= ideal && *q % P10[J[i]] == 0) { *q /= P10[J[i]]; *e += J[i]; }
+}
+
+static int fast_div(const fmt *f, tcc_dec_ctx *cx, u64 a, u64 b, u64 *out)
+{
+    int sa, sb, ea, eb, da, db, sh, e, ideal;
+    u64 ca, cb, nh, nl, q, rem;
+    if (!fin64(f, a, &sa, &ea, &ca) || !fin64(f, b, &sb, &eb, &cb) || !ca || !cb) return 0;
+    da = dig64(ca); db = dig64(cb);
+    sh = f->p + 1 + db - da;
+    nh = 0; nl = ca;
+    if (!mul128_p10(&nh, &nl, sh) || nh >= cb) return 0;
+    q = div128(nh, nl, cb, &rem);
+    ideal = ea - eb; e = ideal - sh;
+    if (!rem) strip64(&q, &e, ideal);
+    return fast_round(f, cx, sa ^ sb, e, q, rem != 0, out);
+}
+
+static int fast_sqrt(const fmt *f, tcc_dec_ctx *cx, u64 a, u64 *out)
+{
+    int sa, ea, da, m, ideal, e;
+    u64 ca, h, l, s, qh, rem, sh2, sl2;
+    double r;
+    if (!fin64(f, a, &sa, &ea, &ca) || sa || !ca) return 0;
+    if (ea & 1) { ca *= 10; ea--; }
+    ideal = ea / 2;
+    da = dig64(ca);
+    m = (2 * (f->p + 2) - da + 1) / 2; if (m < 0) m = 0;
+    h = 0; l = ca;
+    if (!mul128_p10(&h, &l, 2 * m)) return 0;
+    r = (double)h * 18446744073709551616.0 + (double)l;
+    s = (u64)sqrt(r);
+    if (!s) s = 1;
+    if (h >= s) return 0;
+    qh = div128(h, l, s, &rem);                    /* one Newton step from the double estimate */
+    s = (s + qh) / 2;
+    for (;;) {                                     /* correct to floor(sqrt(R)) */
+        sl2 = mul64(s, s, &sh2);
+        if (sh2 > h || (sh2 == h && sl2 > l)) { s--; continue; }
+        { u64 s1 = s + 1, th, tl = mul64(s1, s1, &th);
+          if (th < h || (th == h && tl <= l)) { s++; continue; } }
+        break;
+    }
+    e = ideal - m;
+    sl2 = mul64(s, s, &sh2);
+    rem = (sh2 != h || sl2 != l);
+    if (!rem) strip64(&s, &e, ideal);
+    return fast_round(f, cx, 0, e, s, (int)rem, out);
+}
+
 /* ------------------------------------------------------------------ 6 */
 
 #ifdef _WIN32
@@ -1149,12 +1328,23 @@ static void ld32 (tcc_dec32 x, num *u)  { u64 b[2]; b[0] = x.w; b[1] = 0; unpack
 static void ld64 (tcc_dec64 x, num *u)  { u64 b[2]; b[0] = x.w; b[1] = 0; unpack(&F64, b, u); }
 static void ld128(tcc_dec128 x, num *u) { u64 b[2]; b[0] = x.w[0]; b[1] = x.w[1]; unpack(&F128, b, u); }
 
+/* W_x: the low word of a pattern; MK_x: a pattern from one word (only used where FA_x is 1) */
+#define W_d32(x) ((u64)(x).w)
+#define W_d64(x) ((x).w)
+#define W_d128(x) ((x).w[0])
+#define MK_d32(r) ((tcc_dec32){ (uint32_t)(r) })
+#define MK_d64(r) ((tcc_dec64){ (r) })
+#define MK_d128(r) ((tcc_dec128){ { (r), 0 } })
+#define FA_d32 1
+#define FA_d64 1
+#define FA_d128 0
+
 #define DEFFMT(P, T, FM, LDF, STF) \
-T tcc_##P##_add(T a, T b, tcc_dec_ctx *c) { num x, y, r; c = ctxof(c); LDF(a, &x); LDF(b, &y); add_num(&FM, c, &x, &y, 0, &r); return STF(&FM, &r); } \
-T tcc_##P##_sub(T a, T b, tcc_dec_ctx *c) { num x, y, r; c = ctxof(c); LDF(a, &x); LDF(b, &y); add_num(&FM, c, &x, &y, 1, &r); return STF(&FM, &r); } \
-T tcc_##P##_mul(T a, T b, tcc_dec_ctx *c) { num x, y, r; c = ctxof(c); LDF(a, &x); LDF(b, &y); mul_num(&FM, c, &x, &y, &r); return STF(&FM, &r); } \
-T tcc_##P##_div(T a, T b, tcc_dec_ctx *c) { num x, y, r; c = ctxof(c); LDF(a, &x); LDF(b, &y); div_num(&FM, c, &x, &y, &r); return STF(&FM, &r); } \
-T tcc_##P##_sqrt(T a, tcc_dec_ctx *c) { num x, r; c = ctxof(c); LDF(a, &x); sqrt_num(&FM, c, &x, &r); return STF(&FM, &r); } \
+T tcc_##P##_add(T a, T b, tcc_dec_ctx *c) { num x, y, r; u64 o; c = ctxof(c); if (FA_##P && fast_add(&FM, c, W_##P(a), W_##P(b), 0, &o)) return MK_##P(o); LDF(a, &x); LDF(b, &y); add_num(&FM, c, &x, &y, 0, &r); return STF(&FM, &r); } \
+T tcc_##P##_sub(T a, T b, tcc_dec_ctx *c) { num x, y, r; u64 o; c = ctxof(c); if (FA_##P && fast_add(&FM, c, W_##P(a), W_##P(b), 1, &o)) return MK_##P(o); LDF(a, &x); LDF(b, &y); add_num(&FM, c, &x, &y, 1, &r); return STF(&FM, &r); } \
+T tcc_##P##_mul(T a, T b, tcc_dec_ctx *c) { num x, y, r; u64 o; c = ctxof(c); if (FA_##P && fast_mul(&FM, c, W_##P(a), W_##P(b), &o)) return MK_##P(o); LDF(a, &x); LDF(b, &y); mul_num(&FM, c, &x, &y, &r); return STF(&FM, &r); } \
+T tcc_##P##_div(T a, T b, tcc_dec_ctx *c) { num x, y, r; u64 o; c = ctxof(c); if (FA_##P && fast_div(&FM, c, W_##P(a), W_##P(b), &o)) return MK_##P(o); LDF(a, &x); LDF(b, &y); div_num(&FM, c, &x, &y, &r); return STF(&FM, &r); } \
+T tcc_##P##_sqrt(T a, tcc_dec_ctx *c) { num x, r; u64 o; c = ctxof(c); if (FA_##P && fast_sqrt(&FM, c, W_##P(a), &o)) return MK_##P(o); LDF(a, &x); sqrt_num(&FM, c, &x, &r); return STF(&FM, &r); } \
 T tcc_##P##_fma(T a, T b, T d, tcc_dec_ctx *c) { num x, y, z, r; c = ctxof(c); LDF(a, &x); LDF(b, &y); LDF(d, &z); fma_num(&FM, c, &x, &y, &z, &r); return STF(&FM, &r); } \
 T tcc_##P##_quantize(T a, T b, tcc_dec_ctx *c) { num x, y, r; c = ctxof(c); LDF(a, &x); LDF(b, &y); quantize_num(&FM, c, &x, &y, &r); return STF(&FM, &r); } \
 int tcc_##P##_compare(T a, T b, tcc_dec_ctx *c) { num x, y; c = ctxof(c); LDF(a, &x); LDF(b, &y); return compare_num(c, &x, &y); } \
