@@ -6176,6 +6176,10 @@ redo:
             ad->a.dllimport = 1;
             break;
         default:
+            if (!strcmp(get_tok_str(t, NULL), "thread")) { /* __declspec(thread) */
+                ad->a.thread = 1;
+                break;
+            }
             if (!strcmp(get_tok_str(t, NULL), "owner")
                 || !strcmp(get_tok_str(t, NULL), "__owner__")) {
                 ad->a.owner = 1;
@@ -7095,6 +7099,11 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
             if (ad->attr_mode) {
                 u = ad->attr_mode -1;
                 t = (t & ~(VT_BTYPE|VT_LONG)) | u;
+            }
+            if (ad->a.thread) { /* same as _Thread_local */
+                if (t & VT_TLS)
+                    tcc_error("multiple thread-local storage specifiers");
+                ad->a.thread = 0, t |= VT_TLS;
             }
             continue;
             /* GNUC typeof */

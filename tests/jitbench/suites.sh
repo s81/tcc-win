@@ -43,6 +43,8 @@ for c in "$SRC"/??_*.c "$SRC"/???_*.c; do
     156_tls_dll)
         $TCC "$c" -shared -D DLL=1 -o 156a1.dll && $TCC "$c" -shared -D DLL=1 -o 156a2.dll &&
         $TCC "$c" 156a1.dll -o $n.exe && ./$n.exe ;;
+    157_declspec_thread)
+        $TCC "$c" -shared -D DLL=1 -o 157a1.dll && $TCC "$c" 157a1.dll -o $n.exe && ./$n.exe ;;
     146_tls_extern)
         $TCC -c "$c" -o $n-main.o && $TCC -c "$c" -DDEFS -o $n-defs.o &&
         $TCC -no-pie -Wl,-z,noexecstack $n-main.o $n-defs.o -o $n.exe && ./$n.exe ;;
