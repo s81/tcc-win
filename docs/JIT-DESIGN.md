@@ -536,6 +536,19 @@ int       tcc_d64_to_string (char *buf, size_t n, tcc_dec64, const char *fmt);
   msvcrt's scanf cannot be extended and tcc-win has no scanf wrapper today:
   Stage L supplies `strto*`; a full `scanf` wrapper is decision 6.
 
+**Stage L status (implemented).** `lib/decbid.c` + `include/tcc_decimal.h`;
+tests in `tests/decimal/` (Python `_pydecimal` oracle, `run.sh`, also run by
+`tests/jitbench/suites.sh`). As built: tininess before rounding; non-canonical
+encodings read as zero; NaN payload of the first signaling, else first quiet
+operand; `quantize` raises Inexact; `x/inf` is zero with the smallest
+exponent; binary to decimal conversions give the exact value in lowest terms.
+Decimal and binary conversions go through exact integers (no reciprocal
+tables anywhere). decimal32/64 add, sub, mul, div and sqrt have 64-bit fast
+paths that fall back to the general path for anything unusual. **printf is
+pending:** `%H %D %DD` need a decimal argument ABI (decision 7), so for now
+use `tcc_dNN_to_string` (formats `s` and `f`, see the header). arm64 and i386
+are compile-checked only, not run. `scanf` is out of scope (decision 6).
+
 ### 7.3 Stage T: compiler support (after Stage L passes)
 
 - Keywords `_Decimal32`, `_Decimal64`, `_Decimal128`; literal suffixes `DF`,

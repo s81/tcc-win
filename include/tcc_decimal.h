@@ -61,8 +61,9 @@ tcc_dec32  tcc_##P##_to_d32 (T, tcc_dec_ctx *); \
 tcc_dec64  tcc_##P##_to_d64 (T, tcc_dec_ctx *); \
 tcc_dec128 tcc_##P##_to_d128(T, tcc_dec_ctx *); \
 /* strtod-style: leading blanks, sign, digits[.digits][e[sign]digits], \
-   inf, infinity, nan, nan(digits), snan, snan(digits); *end = first unused \
-   char (the start if nothing parsed) */ \
+   inf, infinity, nan, nan(d), nand, snan likewise (payload digits beyond the \
+   format keep their low digits); *end = first unused char (the start if \
+   nothing parsed) */ \
 T tcc_##P##_from_string(const char *, char **end, tcc_dec_ctx *); \
 /* fmt NULL, "" or "s": scientific string, cohort preserving (1.20E+3, \
    0.00123, -Infinity, NaN12, sNaN); "f": plain digits without exponent. \
