@@ -661,6 +661,28 @@ Approved by the owner as proposed:
 7. `_Decimal32/64` ABI stays open until GCC can be probed; Stage L uses structs and does not depend on it.
 8. Oracles: IBM test cases and decNumber (ICU License), Python `decimal`, GCC as a black box when available.
 
+### License and patent check (2026-11-13, web pages only)
+
+Replaces the "from memory" entries of 7.1 and 7.4. Google Patents status
+fields are Google's computed values, not a legal finding.
+
+| Item | Finding | Source |
+|---|---|---|
+| Berkeley TestFloat 3e, SoftFloat 3e | BSD-3-Clause style (Regents of the University of California): keep notice, no endorsement | jhauser.us TestFloat-general.html / SoftFloat.html, section 3 |
+| GNU MPFR 4.2.2 | LGPL-3.0-or-later; obligations only on distribution | mpfr.org manual (3.1.5 copy); official current page not read |
+| Csmith | BSD-2-Clause style (University of Utah) | github.com/csmith-project/csmith COPYING |
+| mpdecimal (core of Python `decimal`) | BSD-2-Clause; CPython itself PSF-2.0 | bytereef.org/mpdecimal/download.html; CPython LICENSE |
+| Paranoia (netlib C) | **no license or permission statement found**: not usable until you decide | netlib.org/paranoia |
+| IBM dectest, decNumber | ICU License confirmed (test cases explicitly covered) | speleotrove.com/decimal |
+| GCC runtime exception 3.1 | allows target code built with GCC's runtime under any terms | gnu.org gcc-exception-3.1 |
+| GCC libbid | GCC's commit mail of 2025-05-15 says libbid was updated "according to the latest Intel Decimal Floating-Point Math Library": GCC's BID runtime tracks Intel's library. Using GCC as a black box is therefore an indirect comparison with Intel's code | gcc.gnu.org gcc-cvs 2025-May/423258 |
+| US 7,707,233 B2 (Intel) | base conversion with stored negative powers; **Active**, adjusted expiry 2029-01-16 | Google Patents |
+| US 7,912,890 B2 (from US 2007/0266072, decimal multiplication on binary hardware) | Expired - Fee Related | Google Patents |
+| US 7,814,138 B2 (from US 2007/0266073, decimal addition on binary hardware) | Expired - Fee Related | Google Patents |
+
+Consequence: decision 5 (no reciprocal tables) still stands because of
+US 7,707,233. Paranoia is not used. Legal status was not checked on USPTO.
+
 ## 10. Not verified in this phase
 
 - Anything about GCC, MSVC or clang output, including the MinGW decimal ABI,
