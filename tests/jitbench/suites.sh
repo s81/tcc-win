@@ -98,5 +98,11 @@ bt() {
     return 0
 }
 t btest bt
+# decimal library (lib/decbid.c, in libtcc1.a): vector replay, unit tests (also under -run), arm64 compile check
+t decimal-vectors sh -c "$TCC $T/decimal/dectest.c -o dectest.exe && ./dectest.exe $T/decimal/vectors.txt"
+t decimal-unit    sh -c "$TCC $T/decimal/decunit.c -o decunit.exe && ./decunit.exe && $TCC -run $T/decimal/decunit.c"
+for X in I386 ARM64; do   # compile only: the arm64 and i386 objects are not run here
+    t cross-decbid-$X sh -c "$TCC -DTCC_TARGET_PE -DTCC_TARGET_$X -run $TOP/tcc.c -c $TOP/lib/decbid.c $F -o decbid-$X.o"
+done
 echo "FAILED:${failed:- none}"
 [ -z "$failed" ]
