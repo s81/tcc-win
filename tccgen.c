@@ -2600,6 +2600,42 @@ gv2:
 }
 #endif
 
+/* x op y in the precision of type 'bt' (float, double or long double). The
+   operands are exact copies of values of that type. volatile keeps the host
+   compiler from evaluating in a wider type or fusing a multiply into an add,
+   so the result is the IEEE result whatever the host's FLT_EVAL_METHOD. */
+static long double fold_arith(int op, int bt, long double x, long double y)
+{
+    if (bt == VT_FLOAT) {
+        volatile float a = (float)x, b = (float)y, r;
+        switch (op) {
+        case '+': r = a + b; break;
+        case '-': r = a - b; break;
+        case '*': r = a * b; break;
+        default:  r = a / b; break;
+        }
+        return r;
+    } else if (bt == VT_DOUBLE) {
+        volatile double a = (double)x, b = (double)y, r;
+        switch (op) {
+        case '+': r = a + b; break;
+        case '-': r = a - b; break;
+        case '*': r = a * b; break;
+        default:  r = a / b; break;
+        }
+        return r;
+    } else {
+        volatile long double a = x, b = y, r;
+        switch (op) {
+        case '+': r = a + b; break;
+        case '-': r = a - b; break;
+        case '*': r = a * b; break;
+        default:  r = a / b; break;
+        }
+        return r;
+    }
+}
+
 /* generate a floating point operation with constant propagation */
 static void gen_opif(int op)
 {
@@ -2636,9 +2672,11 @@ static void gen_opif(int op)
         if (!(ieee_finite(f1) || !ieee_finite(f2)) && !CONST_WANTED)
             goto general_case;
         switch(op) {
-        case '+': f1 += f2; break;
-        case '-': f1 -= f2; break;
-        case '*': f1 *= f2; break;
+        case '+':
+        case '-':
+        case '*':
+            f1 = fold_arith(op, bt, f1, f2);
+            break;
         case '/': 
             if (f2 == 0.0) {
                 union { float f; unsigned u; } x1, x2, y;
@@ -2657,7 +2695,7 @@ static void gen_opif(int op)
                 f1 = y.f;
                 break;
             }
-            f1 /= f2;
+            f1 = fold_arith(op, bt, f1, f2);
             break;
         case TOK_NEG:
             f1 = -f1;
@@ -3459,6 +3497,29 @@ static void gen_cast_s(int t)
     gen_cast(&type);
 }
 
+/* constant (neg ? -m : m) converted to fp type 'dbt' with one rounding,
+   without relying on the host's long double. For m >= 2^63 the lowest bit is
+   kept as a sticky bit so that the signed host conversion cannot lose it. */
+static void fold_itof(CValue *c, int dbt, uint64_t m, int neg)
+{
+    int big = m >> 63;
+    uint64_t h = big ? (m >> 1) | (m & 1) : m;
+    if (dbt == VT_FLOAT) {
+        volatile float f = (float)(int64_t)h;
+        if (big)
+            f *= 2.0f;
+        c->f = neg ? -f : f;
+    } else if (dbt == VT_DOUBLE) {
+        volatile double d = (double)(int64_t)h;
+        if (big)
+            d *= 2.0;
+        c->d = neg ? -d : d;
+    } else {
+        long double l = (long double)m;
+        c->ld = neg ? -l : l;
+    }
+}
+
 /* cast 'vtop' to 'type'. Casting to bitfields is forbidden. */
 static void gen_cast(CType *type)
 {
@@ -3513,19 +3574,22 @@ error:
                 vtop->c.ld = vtop->c.d;
 
             if (df) {
-                if (sbt_bt == VT_LLONG) {
-                    if ((sbt & VT_UNSIGNED) || !(vtop->c.i >> 63))
-                        vtop->c.ld = vtop->c.i;
-                    else
-                        vtop->c.ld = -(long double)-vtop->c.i;
-                } else if(!sf) {
-                    if ((sbt & VT_UNSIGNED) || !(vtop->c.i >> 31))
-                        vtop->c.ld = (uint32_t)vtop->c.i;
-                    else
-                        vtop->c.ld = -(long double)-(uint32_t)vtop->c.i;
-                }
-
-                if (dbt == VT_FLOAT)
+                if (!sf) {
+                    uint64_t m;
+                    int neg;
+                    if (sbt_bt == VT_LLONG) {
+                        m = vtop->c.i;
+                        neg = !(sbt & VT_UNSIGNED) && (m >> 63);
+                        if (neg)
+                            m = -m;
+                    } else {
+                        m = (uint32_t)vtop->c.i;
+                        neg = !(sbt & VT_UNSIGNED) && (vtop->c.i >> 31);
+                        if (neg)
+                            m = (uint32_t)-(uint32_t)m;
+                    }
+                    fold_itof(&vtop->c, dbt, m, neg);
+                } else if (dbt == VT_FLOAT)
                     vtop->c.f = (float)vtop->c.ld;
                 else if (dbt == VT_DOUBLE)
                     vtop->c.d = (double)vtop->c.ld;
