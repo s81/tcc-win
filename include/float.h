@@ -3,6 +3,13 @@
 
 #define FLT_RADIX 2
 
+/* float and double operations are evaluated in their own type (SSE/NEON code,
+   constants folded in their own type); the i386 x87 code generator does not
+   promise that, so it is left undefined there */
+#ifndef __i386__
+#define FLT_EVAL_METHOD 0
+#endif
+
 /* IEEE float */
 #define FLT_MANT_DIG 24
 #define FLT_DIG 6
