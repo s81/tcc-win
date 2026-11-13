@@ -1,6 +1,8 @@
 """Generate fpka.c: binary32/binary64 known-answer test (docs/JIT-BASELINE.md).
 
 usage: python gen_fpka.py > fpka.c
+       python gen_fpka.py --small > fpka-small.c    (committed as tests/tests2/155_fp_known_answers.c:
+                                                    all special cases, 1/8 of the random ones)
 
 Expected results come from CPython (IEEE-754 binary64, round-to-nearest-even).
 binary32 results are computed in binary64 and rounded once more, which is exact
@@ -13,9 +15,16 @@ line per category and returns the number of mismatches.
 import math
 import random
 import struct
+import sys
 from fractions import Fraction
 
 rnd = random.Random(20261113)
+SMALL = "--small" in sys.argv
+
+
+def R(n):  # number of random cases
+    return n // 8 if SMALL else n
+
 NAN = 0x7FF8000000000000
 
 
@@ -121,7 +130,7 @@ w("    total += cat_bad; cat_n = cat_bad = 0; }\n")
 
 # ---- binary64 two-operand, run time
 pairs = [(a, b) for a in SPECIAL_D for b in SPECIAL_D]
-pairs += [(rand_d(i % 2), rand_d(i % 2)) for i in range(1200)]
+pairs += [(rand_d(i % 2), rand_d(i % 2)) for i in range(R(1200))]
 w("static const struct { uint64_t a, b, add, sub, mul, div; } d2[] = {")
 for a, b in pairs:
     w("{0x%016xull,0x%016xull,0x%016xull,0x%016xull,0x%016xull,0x%016xull}," %
@@ -131,7 +140,7 @@ w("};")
 # ---- binary32 two-operand, run time
 SPECIAL_F = [tof(x) for x in SPECIAL_D[:12]] + [b2f(1), b2f(0x00800000), b2f(0x7F7FFFFF), 16777216.0, 16777218.0]
 fpairs = [(a, b) for a in SPECIAL_F for b in SPECIAL_F]
-fpairs += [(rand_f(i % 2), rand_f(i % 2)) for i in range(1200)]
+fpairs += [(rand_f(i % 2), rand_f(i % 2)) for i in range(R(1200))]
 w("static const struct { uint32_t a, b, add, sub, mul, div; } f2[] = {")
 for a, b in fpairs:
     w("{0x%08xu,0x%08xu,0x%08xu,0x%08xu,0x%08xu,0x%08xu}," %
@@ -139,26 +148,26 @@ for a, b in fpairs:
 w("};")
 
 # ---- sqrt
-sq = [abs(rand_d(i % 2)) for i in range(600)] + [0.0, 2.0, 5e-324, 1.7976931348623157e308]
+sq = [abs(rand_d(i % 2)) for i in range(R(600))] + [0.0, 2.0, 5e-324, 1.7976931348623157e308]
 w("static const struct { uint64_t a, r; } dsq[] = {")
 for a in sq:
     w("{0x%016xull,0x%016xull}," % (d2b(a), d2b(math.sqrt(a))))
 w("};")
-fsq = [abs(rand_f(i % 2)) for i in range(600)] + [0.0, 2.0, b2f(1)]
+fsq = [abs(rand_f(i % 2)) for i in range(R(600))] + [0.0, 2.0, b2f(1)]
 w("static const struct { uint32_t a, r; } fsq[] = {")
 for a in fsq:
     w("{0x%08xu,0x%08xu}," % (f2b(a), f2b(tof(math.sqrt(a)))))
 w("};")
 
 # ---- a*b+c: two roundings (no contraction); count how many an FMA would change
-tri = [(rand_d(1), rand_d(1), rand_d(1)) for _ in range(600)]
+tri = [(rand_d(1), rand_d(1), rand_d(1)) for _ in range(R(600))]
 fma_diff = sum(1 for a, b, c in tri if math.fma(a, b, c) != a * b + c)
 w("/* %d of %d binary64 triples give a different result if a*b+c is contracted to FMA */" % (fma_diff, len(tri)))
 w("static const struct { uint64_t a, b, c, r; } d3[] = {")
 for a, b, c in tri:
     w("{0x%016xull,0x%016xull,0x%016xull,0x%016xull}," % (d2b(a), d2b(b), d2b(c), bits(a * b + c)))
 w("};")
-ftri = [(rand_f(1), rand_f(1), rand_f(1)) for _ in range(600)]
+ftri = [(rand_f(1), rand_f(1), rand_f(1)) for _ in range(R(600))]
 f_excess = sum(1 for a, b, c in ftri if tof(a * b + c) != tof(tof(a * b) + c))
 w("/* %d of %d binary32 triples differ if a*b is not rounded to binary32 before the add */" % (f_excess, len(ftri)))
 w("static const struct { uint32_t a, b, c, r; } f3[] = {")
@@ -169,25 +178,26 @@ w("};")
 # ---- conversions, run time
 ints = [0, 1, -1, 2 ** 53 + 1, 2 ** 53 + 3, -(2 ** 53) - 1, 2 ** 63 - 1, -(2 ** 63), 2 ** 24 + 1, 2 ** 24 + 3,
         16777217, 9007199254740993, 2 ** 62 + 2 ** 9 + 1]
-ints += [rnd.getrandbits(rnd.randint(1, 63)) * rnd.choice((1, -1)) for _ in range(400)]
+ints += [rnd.getrandbits(rnd.randint(1, 63)) * rnd.choice((1, -1)) for _ in range(R(400))]
 w("static const struct { int64_t i; uint64_t d; uint32_t f; } ci[] = {")
 for i in ints:
     w("{%s,0x%016xull,0x%08xu}," % ("(-9223372036854775807ll-1)" if i == -(2 ** 63) else "%dll" % i,
                                   d2b(float(i)), frac_to_f32(Fraction(i))))
 w("};")
-uints = [0, 1, 2 ** 64 - 1, 2 ** 63, 2 ** 63 + 1, 2 ** 63 + 2 ** 10 + 1, 2 ** 64 - 2 ** 10, 2 ** 64 - 2 ** 39 - 1]
-uints += [rnd.getrandbits(64) for _ in range(300)] + [rnd.getrandbits(64) | 2 ** 63 for _ in range(100)]
+uints = [0, 1, 2 ** 64 - 1, 2 ** 63, 2 ** 63 + 1, 2 ** 63 + 2 ** 10 + 1, 2 ** 64 - 2 ** 10, 2 ** 64 - 2 ** 39 - 1,
+         2 ** 63 + 2 ** 40 + 2 ** 39 - 1, 2 ** 63 + 2 ** 11 + 1, 2 ** 63 + 2 ** 10]
+uints += [rnd.getrandbits(64) for _ in range(R(300))] + [rnd.getrandbits(64) | 2 ** 63 for _ in range(R(100))]
 w("static const struct { uint64_t u, d; uint32_t f; } cu[] = {")
 for u in uints:
     w("{%dull,0x%016xull,0x%08xu}," % (u, d2b(float(u)), frac_to_f32(Fraction(u))))
 w("};")
-dvals = [rand_d(1) * rnd.choice((1, 1e3, 1e9, 1e15, 1e18)) for _ in range(400)]
+dvals = [rand_d(1) * rnd.choice((1, 1e3, 1e9, 1e15, 1e18)) for _ in range(R(400))]
 dvals = [x for x in dvals if abs(x) < 2.0 ** 62] + [0.5, -0.5, 1.5, -1.5, 2.0 ** 31, -(2.0 ** 31), 4294967295.9]
 w("static const struct { uint64_t d; int64_t i; uint32_t f; } cd[] = {")
 for x in dvals:
     w("{0x%016xull,%dll,0x%08xu}," % (d2b(x), int(x), fbits(tof(x))))
 w("};")
-udv = [abs(rand_d(1)) * rnd.choice((1, 1e9, 1e18, 9e18, 1.8e19)) for _ in range(300)]
+udv = [abs(rand_d(1)) * rnd.choice((1, 1e9, 1e18, 9e18, 1.8e19)) for _ in range(R(300))]
 udv = [x for x in udv if x < 2.0 ** 64] + [2.0 ** 63, 2.0 ** 63 + 2048, 18446744073709549568.0]
 w("static const struct { uint64_t d, u; } cdu[] = {")
 for x in udv:
@@ -195,7 +205,7 @@ for x in udv:
 w("};")
 
 # ---- constant folding: the same operations as constant expressions
-fold = [(rand_d(1), rand_d(1)) for _ in range(300)] + [(0.1, 0.2), (1.0, 3.0), (1e308, 10.0), (5e-324, 0.5),
+fold = [(rand_d(1), rand_d(1)) for _ in range(R(300))] + [(0.1, 0.2), (1.0, 3.0), (1e308, 10.0), (5e-324, 0.5),
                                                         (2.0 ** 53, 1.0), (1.7976931348623157e308, 1.7976931348623157e308)]
 for name, op, fn in (("add", "+", lambda a, b: a + b), ("sub", "-", lambda a, b: a - b),
                      ("mul", "*", lambda a, b: a * b), ("div", "/", div)):
@@ -206,7 +216,7 @@ for name, op, fn in (("add", "+", lambda a, b: a + b), ("sub", "-", lambda a, b:
     for a, b in fold:
         w("0x%016xull," % bits(fn(a, b)))
     w("};")
-ffold = [(rand_f(1), rand_f(1)) for _ in range(300)] + [(tof(0.1), tof(0.2)), (1.0, 3.0), (b2f(0x7F7FFFFF), 2.0),
+ffold = [(rand_f(1), rand_f(1)) for _ in range(R(300))] + [(tof(0.1), tof(0.2)), (1.0, 3.0), (b2f(0x7F7FFFFF), 2.0),
                                                          (b2f(1), 0.5), (16777216.0, 1.0)]
 for name, op, fn in (("add", "+", lambda a, b: a + b), ("sub", "-", lambda a, b: a - b),
                      ("mul", "*", lambda a, b: a * b), ("div", "/", div)):
@@ -244,7 +254,7 @@ w("};")
 
 # ---- decimal literals parsed by the compiler
 lits = []
-for _ in range(400):
+for _ in range(R(400)):
     digits = "".join(rnd.choice("0123456789") for _ in range(rnd.randint(1, 20)))
     lits.append("%s.%se%d" % (rnd.randint(1, 9), digits, rnd.randint(-300, 300)))
 lits += ["0.1", "0.3", "1e23", "9007199254740993.0", "2.2250738585072011e-308", "4.9e-324", "1.7976931348623157e308",
@@ -255,7 +265,7 @@ for s in lits:
     w("0x%016xull," % d2b(float(s)))
 w("};")
 flits = []
-for _ in range(400):
+for _ in range(R(400)):
     digits = "".join(rnd.choice("0123456789") for _ in range(rnd.randint(1, 12)))
     flits.append("%s.%se%d" % (rnd.randint(1, 9), digits, rnd.randint(-40, 37)))
 flits += ["0.1", "16777217.0", "1.17549435e-38", "1e-45", "7e-46", "3.4028235e38", "1.00000017881393432617187499",
