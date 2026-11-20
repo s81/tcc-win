@@ -520,7 +520,8 @@ struct SymAttr {
     own_fields  : 1, /* struct/union: has [[owner]] members */
     deprecated  : 1, /* [[deprecated]] (message: see depr_msgs) */
     nodiscard   : 1, /* struct/union/enum tag declared [[nodiscard]] */
-    xxxx        : 10; /* not used */
+    thread      : 1, /* __declspec(thread), taken over by parse_btype */
+    xxxx        : 9; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */

@@ -1979,6 +1979,14 @@ ST_FUNC void resolve_common_syms(TCCState *s1)
     /* Allocate common symbols in BSS.  */
     for_each_elem(symtab_section, 1, sym, ElfW(Sym)) {
         if (sym->st_shndx == SHN_COMMON && sym->st_size) {
+            if ((s1->output_type == TCC_OUTPUT_MEMORY
+#ifdef TCC_TARGET_PE
+                 || 1
+#endif
+                ) && (addr_t)bss_section->data_offset + sym->st_size + sym->st_value > 0x7fffffff) {
+                tcc_error_noabort("section '%s' would exceed 2 GiB", bss_section->name);
+                break;
+            }
             /* symbol alignment is in st_value for SHN_COMMONs */
 	    sym->st_value = section_add(bss_section, sym->st_size,
 					sym->st_value);

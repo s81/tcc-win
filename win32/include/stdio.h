@@ -187,11 +187,15 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
   int __cdecl fscanf(FILE *_File,const char *_Format,...);
   int __cdecl fsetpos(FILE *_File,const fpos_t *_Pos);
   int __cdecl fseek(FILE *_File,long _Offset,int _Origin);
-   int fseeko64(FILE* stream, _off64_t offset, int whence);
   long __cdecl ftell(FILE *_File);
-  _off64_t ftello64(FILE * stream);
   int __cdecl _fseeki64(FILE *_File,__int64 _Offset,int _Origin);
-  __int64 __cdecl _ftelli64(FILE *_File);
+  /* msvcrt.dll has _fseeki64 but no _ftelli64, ftello64 or fseeko64;
+     fpos_t is a 64-bit byte offset there */
+  __CRT_INLINE __int64 __cdecl _ftelli64(FILE *_File) {
+    fpos_t _Pos; return fgetpos(_File, &_Pos) ? -1 : (__int64)_Pos; }
+  __CRT_INLINE int fseeko64(FILE *_File, _off64_t _Offset, int _Origin) {
+    return _fseeki64(_File, _Offset, _Origin); }
+  __CRT_INLINE _off64_t ftello64(FILE *_File) { return _ftelli64(_File); }
   size_t __cdecl fwrite(const void *_Str,size_t _Size,size_t _Count,FILE *_File);
   int __cdecl getc(FILE *_File);
   int __cdecl getchar(void);

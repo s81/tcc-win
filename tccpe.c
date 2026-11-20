@@ -2252,6 +2252,26 @@ static void pe_set_options(TCCState * s1, struct pe_info *pe)
         pe->imagebase = s1->text_addr;
 }
 
+/* The loader processes the TLS directory of a DLL (stores the TLS index) only
+   if it has an import table. Add one import to a DLL with TLS but no import.
+   An EXE does not need it (checked: its TLS works without imports). */
+static void pe_tls_need_import(struct pe_info *pe)
+{
+    TCCState *s1 = pe->s1;
+    struct import_symbol *is;
+    int i, dll;
+
+    for (i = 1; i < s1->nb_sections; ++i)
+        if (s1->sections[i]->sh_flags & SHF_TLS)
+            break;
+    if (PE_DLL != pe->type || i == s1->nb_sections || pe->imp_count)
+        return;
+    dll = tcc_add_dllref(s1, "kernel32.dll", 0)->index;
+    is = pe_add_import(pe, pe_putimport(s1, dll, "GetCurrentProcessId", 0));
+    is->iat_index = put_elf_sym(symtab_section, 0, sizeof(DWORD),
+        ELFW(ST_INFO)(STB_LOCAL, STT_OBJECT), 0, SHN_UNDEF, "IAT.tls");
+}
+
 ST_FUNC int pe_output_file(TCCState *s1, const char *filename)
 {
     struct pe_info pe;
@@ -2272,6 +2292,7 @@ ST_FUNC int pe_output_file(TCCState *s1, const char *filename)
     if (s1->nb_errors)
         goto done;
     if (filename) {
+        pe_tls_need_import(&pe);
         pe_assign_addresses(&pe);
         relocate_syms(s1, s1->symtab, 0);
         if (s1->nb_errors)

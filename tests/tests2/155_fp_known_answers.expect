@@ -1,0 +1,35 @@
+rt binary64 add        checked=  634 mismatches=0
+rt binary64 sub        checked=  634 mismatches=0
+rt binary64 mul        checked=  634 mismatches=0
+rt binary64 div        checked=  634 mismatches=0
+rt binary64 sqrt (crt) checked=   79 mismatches=0
+rt binary64 a*b+c      checked=   75 mismatches=0
+rt binary32 add        checked=  439 mismatches=0
+rt binary32 sub        checked=  439 mismatches=0
+rt binary32 mul        checked=  439 mismatches=0
+rt binary32 div        checked=  439 mismatches=0
+rt binary32 sqrt (crt) checked=   78 mismatches=0
+rt binary32 a*b+c      checked=   75 mismatches=0
+rt int64->binary64     checked=   63 mismatches=0
+rt int64->binary32     checked=   63 mismatches=0
+rt uint64->binary64    checked=   60 mismatches=0
+rt uint64->binary32    checked=   60 mismatches=0
+rt binary64->int64     checked=   48 mismatches=0
+rt binary64->binary32  checked=   48 mismatches=0
+rt binary64->uint64    checked=   31 mismatches=0
+fold binary64 add      checked=   43 mismatches=0
+fold binary64 sub      checked=   43 mismatches=0
+fold binary64 mul      checked=   43 mismatches=0
+fold binary64 div      checked=   43 mismatches=0
+fold binary64 a*b+c    checked=   75 mismatches=0
+fold binary32 add      checked=   42 mismatches=0
+fold binary32 sub      checked=   42 mismatches=0
+fold binary32 mul      checked=   42 mismatches=0
+fold binary32 div      checked=   42 mismatches=0
+fold binary32 a*b+c    checked=   75 mismatches=0
+fold uint64->binary64  checked=   60 mismatches=0
+fold uint64->binary32  checked=   60 mismatches=0
+fold binary64->binary32 checked=   48 mismatches=0
+literal binary64       checked=   62 mismatches=0
+literal binary32       checked=   58 mismatches=0
+TOTAL mismatches=0
