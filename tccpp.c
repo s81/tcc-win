@@ -4211,7 +4211,13 @@ static void putdefs(CString *cs, const char *p)
 
 static void tcc_predefs(TCCState *s1, CString *cs, int is_asm)
 {
-    cstr_printf(cs, "#define __TINYC__ 9%.2s\n", &TCC_VERSION[4]);
+    /* "9" + the (up to two) digits after "x.y." of TCC_VERSION; a suffix such
+       as "-dev" in "1.1.0-dev" must not leak into the number */
+    const char *ver = &TCC_VERSION[4];
+    int vn = isnum(ver[0]) ? 1 + !!isnum(ver[1]) : 0;
+    if (!vn)
+        ver = "0", vn = 1;
+    cstr_printf(cs, "#define __TINYC__ 9%.*s\n", vn, ver);
     putdefs(cs, target_machine_defs);
     putdefs(cs, target_os_defs);
 
