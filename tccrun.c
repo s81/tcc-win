@@ -290,14 +290,19 @@ LIBTCCAPI TCCCode *tcc_detach(TCCState *s1)
 
 LIBTCCAPI void *tcc_code_symbol(TCCCode *c, const char *name)
 {
-    char buf[256];
+    char buf[256], *p = NULL;
     TCCCodeSym key, *r;
     if (!c || !name)
         return NULL;
-    if (c->leading_underscore && !strchr(name, '@')) /* as get_sym_addr() */
-        buf[0] = '_', pstrcpy(buf + 1, sizeof buf - 1, name), name = buf;
+    if (c->leading_underscore && !strchr(name, '@')) { /* as get_sym_addr() */
+        size_t n = strlen(name) + 2;
+        p = n <= sizeof buf ? buf : tcc_malloc(n);
+        p[0] = '_', strcpy(p + 1, name), name = p;
+    }
     key.name = name;
     r = bsearch(&key, c->syms, c->nb_syms, sizeof key, code_sym_cmp);
+    if (p && p != buf)
+        tcc_free(p);
     return r ? r->addr : NULL;
 }
 

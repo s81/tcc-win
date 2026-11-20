@@ -11082,7 +11082,11 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 #endif
         if (sec) {
             /* PE images and in-memory images are limited to 2 GiB */
-            if ((addr_t)sec->data_offset + size + align > 0x7fffffff)
+            if ((tcc_state->output_type == TCC_OUTPUT_MEMORY
+#ifdef TCC_TARGET_PE
+                 || 1
+#endif
+                ) && (addr_t)sec->data_offset + size + align > 0x7fffffff)
                 tcc_error("section '%s' would exceed 2 GiB", sec->name);
 	    addr = section_add(sec, size, align);
         } else {
