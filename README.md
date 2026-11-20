@@ -132,8 +132,9 @@ Known deviations and gaps:
   warns on use of a function, variable or typedef (not on struct tags,
   enumerators or members). Both are ordinary warnings, enabled by default and
   silenced by `-w`.
-- Decimal floating point (`_Decimal32/64/128`) is not supported; it is an
-  optional feature in C23.
+- Decimal floating point (`_Decimal32/64/128`) is not supported as a language
+  feature; it is optional in C23. A decimal32/64/128 library is available
+  instead, see [Decimal arithmetic](#decimal-arithmetic).
 - The C library is the one of Windows (msvcrt); the C23 additions listed
   above are supplied by tcc-win's runtime library, including `aligned_alloc`,
   `free_sized` and `free_aligned_sized` (see
@@ -144,6 +145,41 @@ Known deviations and gaps:
 - Old-style (K&R) function definitions are an error in C23 mode
   (`-std=c23`, the default); they are accepted with `-std=c17` or lower. The
   upstream test suite (`tests/tcctest.c`) is compiled with `-std=c17`.
+
+## Windows additions
+
+### Decimal arithmetic
+
+`#include <tcc_decimal.h>` gives IEEE 754 decimal32, decimal64 and
+decimal128 numbers with correctly rounded `+ - * /`, `sqrt`, `fma`,
+`quantize`, conversions and string parsing and printing, in all five IEEE
+rounding modes. The functions are in `libtcc1.a`, so no link option is
+needed. See [docs/DECIMAL.md](docs/DECIMAL.md).
+
+### Keeping compiled code after `tcc_delete`
+
+libtcc's `tcc_detach` moves relocated in-memory code out of its `TCCState`,
+so the compiler state can be deleted while the code stays callable
+(`tcc_code_symbol`, `tcc_code_free`). In-memory code is never writable
+(W^X) and is fully released when unloaded. See
+[docs/LIBTCC-DETACH.md](docs/LIBTCC-DETACH.md).
+
+### Other changes
+
+- `__declspec(thread)` means the same as `_Thread_local`.
+  Thread-local variables work in tcc-built EXEs and DLLs, including DLLs that
+  import nothing, but not under `-run` (it stops with
+  `thread-local storage not supported with -run`).
+- Floating-point constants are converted exactly: decimal and hexadecimal
+  literals (`float`, `double` and `long double`, which is `double` on
+  Windows), and constant folding of `+ - * /` and of integer-to-floating
+  conversions, give the correctly rounded IEEE result, whatever compiler
+  built tcc-win.
+- `<stdio.h>` declares `_ftelli64`, `fseeko64` and `ftello64` for files
+  over 2 GiB (msvcrt.dll has only `_fseeki64`, so the others are inline
+  wrappers).
+- A section over 2 GiB, in a PE file or in memory, is a compile error that
+  names the section instead of a broken output.
 
 ## No goto
 
