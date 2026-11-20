@@ -212,7 +212,11 @@ ST_FUNC void tcc_run_free(TCCState *s1)
     if (NULL == s1->run_ptr)
         return;
     st_unlink(s1);
+#ifdef _WIN64
     rt_release(s1->run_ptr, s1->run_size, s1->run_function_table);
+#else
+    rt_release(s1->run_ptr, s1->run_size, NULL);
+#endif
 }
 
 /* ------------------------------------------------------------- */
@@ -278,10 +282,15 @@ LIBTCCAPI TCCCode *tcc_detach(TCCState *s1)
             c->dlls[c->nb_dlls++] = s1->loaded_dlls[i]->handle, s1->loaded_dlls[i]->handle = NULL;
 
     c->ptr = s1->run_ptr, c->size = s1->run_size;
+#ifdef _WIN64
     c->function_table = s1->run_function_table;
+#endif
     c->leading_underscore = s1->leading_underscore;
     st_unlink(s1);
-    s1->run_ptr = NULL, s1->run_size = 0, s1->run_function_table = NULL;
+    s1->run_ptr = NULL, s1->run_size = 0;
+#ifdef _WIN64
+    s1->run_function_table = NULL;
+#endif
     /* the state no longer has code: empty its symbol table */
     s->data_offset = s->link->data_offset = s->hash->data_offset = 0;
     init_symtab(s);
