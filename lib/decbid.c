@@ -1047,7 +1047,9 @@ static void from_string(const fmt *f, tcc_dec_ctx *cx, const char *s, char **end
         const char *r = q + 1; int es = 0; long ev = 0;
         if (*r == '-' || *r == '+') { es = *r == '-'; r++; }
         if (dig((unsigned char)*r)) {
-            while (dig((unsigned char)*r)) { if (ev < 400000000L) ev = ev * 10 + (*r - '0'); r++; }
+            /* cap below 1e9: long is 32 bits on Windows, and any |exponent|
+               this large already gives zero or infinity in every format */
+            while (dig((unsigned char)*r)) { if (ev < 100000000L) ev = ev * 10 + (*r - '0'); r++; }
             e10 += es ? -ev : ev; q = r;
         }
     }
