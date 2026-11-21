@@ -433,7 +433,7 @@ static void rt_tls_destroy(void *p)
         b->next->pprev = b->pprev;
     *b->pprev = b->next;
     pthread_mutex_unlock(&t->lock);
-    free(b);
+    (free)(b); /* the libc one: tcc.h makes free() an error */
 }
 
 /* called by the stubs: the current thread's block, made on first use */
@@ -441,7 +441,7 @@ static void *rt_tls_get(TCCRunTLS *t)
 {
     TCCRunTLSBlock *b = pthread_getspecific(t->key);
     if (!b) {
-        b = malloc(sizeof *b + t->size + t->align);
+        b = (malloc)(sizeof *b + t->size + t->align); /* libc, see above */
         if (!b) {
             fprintf(stderr, "tcc: out of memory for thread-local storage\n");
             abort();
@@ -468,7 +468,7 @@ static void rt_tls_release(TCCRunTLS *t)
     pthread_key_delete(t->key); /* no destructor runs after this */
     while ((b = t->blocks) != NULL) {
         t->blocks = b->next;
-        free(b);
+        (free)(b);
     }
     pthread_mutex_destroy(&t->lock);
     tcc_free(t);
