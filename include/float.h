@@ -39,7 +39,7 @@
 #define DBL_DECIMAL_DIG 17
 #define DBL_HAS_SUBNORM 1
 
-/* horrible intel long double (but long double is a double on Windows) */
+/* horrible intel long double (but long double is a double on Windows, also on arm64) */
 #if (defined __i386__ || defined __x86_64__) && !defined _WIN32
 
 #define LDBL_MANT_DIG 64
@@ -56,7 +56,7 @@
 #define LDBL_HAS_SUBNORM 1
 #define DECIMAL_DIG 21
 
-#elif defined __aarch64__ || defined __riscv
+#elif (defined __aarch64__ || defined __riscv) && !defined _WIN32
 /*
  * Use values from:
  * gcc -dM -E -xc /dev/null | grep LDBL | sed -e "s/__//g"
