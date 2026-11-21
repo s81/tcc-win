@@ -4,6 +4,8 @@ usage: python gen_fpka.py > fpka.c
        python gen_fpka.py --small > fpka-small.c    (committed as tests/tests2/155_fp_known_answers.c:
                                                     all special cases, 1/8 of the random ones)
 
+Needs Python 3.13 or later: math.fma, used for the a*b+c vectors, was added in 3.13.
+
 Expected results come from CPython (IEEE-754 binary64, round-to-nearest-even).
 binary32 results are computed in binary64 and rounded once more, which is exact
 for + - * / sqrt because 53 >= 2*24+2. Integer and decimal conversions to
