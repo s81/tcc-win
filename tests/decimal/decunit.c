@@ -67,6 +67,15 @@ int main(void)
     CHECK(tcc_d64_compare(tcc_strtod64("1.0", 0), tcc_strtod64("1.00", 0), &c) == 0);
     CHECK(tcc_d64_compare(tcc_strtod64("nan", 0), tcc_strtod64("1", 0), &c) == 2 && !c.flags);
     CHECK(tcc_d64_to_i64(tcc_strtod64("2.5", 0), &c) == 2 && c.flags == TCC_DEC_INEXACT);   /* ties to even */
+    /* exponents too long for a 32-bit long must saturate, not wrap */
+    c.flags = 0;
+    CHECK(!strcmp(str64(tcc_d64_from_string("1e3000000000", &e, &c)), "Infinity") && !*e
+          && c.flags == (TCC_DEC_OVERFLOW | TCC_DEC_INEXACT));
+    c.flags = 0;
+    CHECK(!strcmp(str64(tcc_d64_from_string("1e-3000000000", 0, &c)), "0E-398")
+          && c.flags == (TCC_DEC_UNDERFLOW | TCC_DEC_INEXACT));
+    CHECK(!strcmp(str64(tcc_strtod64("0e3000000000", 0)), "0E+369"));
+    CHECK(!strcmp(str64(tcc_strtod64("-1e99999999999999999999", 0)), "-Infinity"));
     if (fails) { printf("decunit: %d failed\n", fails); return 1; }
     printf("decunit: ok\n");
     return 0;
