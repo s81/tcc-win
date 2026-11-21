@@ -472,13 +472,30 @@ static void arm64_sym(int r, Sym *sym, addr_t addend)
 {
     if (sym->type.t & VT_TLS) {
 #ifdef TCC_TARGET_PE
-        Sym *s2 = external_global_sym(TOK___tls_index, &int_type);
-        int r2 = get_reg(RC_R(16));
-        arm64_sym(30, s2, 0);
-        o(0xb94003de); // ldr w30, [x30]
-        o(0xf9402e40 | r2); // ldr r2, [x18, #88]
-        o(0x8b1e0c1e | r2 << 5); // add x30, r2, x30, lsl #3
-        o(0xf94003c0 | r); // ldr xr, [x30]
+#ifdef TCC_IS_NATIVE
+        if (tcc_state->output_type == TCC_OUTPUT_MEMORY) {
+            /* in-memory code: the thread's block is in a Win32 TLS slot,
+               NULL until the trampoline has made one (see tccrun.c) */
+            Sym *tramp;
+            int slot = tcc_run_tls(tcc_state, &tramp);
+            if (slot < 0)
+                tcc_error("no free Win32 TLS slot for thread-local variables in memory");
+            o(0xf9400240 | (0x1480 / 8 + slot) << 10 | r); // ldr xr, [x18, #TlsSlots+8*slot]
+            o(0xb5000060 | r); // cbnz xr, +12
+            arm64_reloca(tramp, R_AARCH64_CALL26, 0);
+            o(ARM64_BL); // bl trampoline (x30 is scratch here, as below)
+            o(0x17fffffd); // b back to the load
+        } else
+#endif
+        {
+            Sym *s2 = external_global_sym(TOK___tls_index, &int_type);
+            int r2 = get_reg(RC_R(16));
+            arm64_sym(30, s2, 0);
+            o(0xb94003de); // ldr w30, [x30]
+            o(0xf9402e40 | r2); // ldr r2, [x18, #88]
+            o(0x8b1e0c1e | r2 << 5); // add x30, r2, x30, lsl #3
+            o(0xf94003c0 | r); // ldr xr, [x30]
+        }
 #else
         o(0xd53bd040 | r); /* mrs xr, tpidr_el0 */
 #endif

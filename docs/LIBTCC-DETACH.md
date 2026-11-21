@@ -105,6 +105,14 @@ detached or not:
   (or by `tcc_code_free` after a detach). Compiling and unloading the same
   code 2000 times does not grow the process's memory
   (`tests/libtcc_test_detach.c` checks this).
+- **Thread-local variables.** `_Thread_local` and `__declspec(thread)`
+  work: each thread gets its own copy, made from the initial values the first
+  time the thread touches one, and freed when the thread exits or when the
+  code is unloaded (`tcc_delete` or `tcc_code_free`). Each compiled image
+  with thread-local variables uses one Win32 TLS slot, which must be below 64
+  (otherwise compiling fails with `no free Win32 TLS slot for thread-local
+  variables in memory`), and one FLS slot. Code that switches fibers must not
+  use thread-local variables.
 - **2 GiB limit.** An in-memory image larger than 2 GiB is an error, as is a
   single section over 2 GiB in an in-memory image or a PE file. The message
   names the section, for example
@@ -114,8 +122,8 @@ detached or not:
 ## Tests
 
 `tests/libtcc_test_detach.c` covers detaching, symbol lookup, unloading, page
-protection, memory growth over repeated cycles, `-bt` being refused and the
-2 GiB errors. The upstream test suite builds and runs it
+protection, memory growth over repeated cycles, `-bt` being refused, the
+2 GiB errors and thread-local variables used from several threads. The upstream test suite builds and runs it
 (`make libtest_detach` in `tests/`). To run it by hand from PowerShell in the
 repository root:
 

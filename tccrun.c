@@ -199,6 +199,200 @@ static void rt_release(void *ptr, unsigned size, void *function_table)
 #endif
 }
 
+/* ------------------------------------------------------------- */
+/* thread-local storage of in-memory code (PE)
+
+   A run image is not loaded by the Windows loader, so it gets no slot in the
+   loader's TLS array, which EXEs and DLLs use. Instead the code generator
+   reads the thread's block from a Win32 TLS slot (TEB->TlsSlots[slot]). The
+   slot is NULL until the thread first touches a thread-local variable; then
+   the code calls a trampoline in the image, which saves every register and
+   calls rt_tls_init() here: it copies the template (the image's TLS
+   sections, placed together by tcc_relocate_ex) into a new block.
+   An FLS slot with a callback frees the blocks when threads exit and, by
+   FlsFree, when the code is unloaded. (FLS values belong to fibers, TLS
+   values to threads: code that switches fibers is not supported.) */
+
+#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+
+typedef struct TCCRunTLS {
+    DWORD tls, fls;     /* Win32 TLS and FLS indexes */
+    void *tmpl;         /* template: the TLS sections of the run image */
+    size_t size;
+    Sym sym;            /* the trampoline, for relocations */
+} TCCRunTLS;
+
+/* the FLS functions, looked up at run time: the kernel32.def of an older tcc
+   that builds this one does not list them (and the Windows SDK declares FLS
+   only for _WIN32_WINNT >= 0x0600) */
+#ifndef FLS_OUT_OF_INDEXES
+# define FLS_OUT_OF_INDEXES ((DWORD)0xFFFFFFFF)
+#endif
+static DWORD (WINAPI *p_FlsAlloc)(void (WINAPI *)(void *));
+static BOOL (WINAPI *p_FlsSetValue)(DWORD, void *);
+static BOOL (WINAPI *p_FlsFree)(DWORD);
+
+static void rt_tls_init(TCCRunTLS *t)
+{
+    void *p = HeapAlloc(GetProcessHeap(), 0, t->size ? t->size : 1);
+    if (!p) {
+        fprintf(stderr, "tcc: out of memory for thread-local storage\n");
+        abort();
+    }
+    memcpy(p, t->tmpl, t->size);
+    p_FlsSetValue(t->fls, p);
+    TlsSetValue(t->tls, p);
+}
+
+static void WINAPI rt_tls_free_block(void *p)
+{
+    HeapFree(GetProcessHeap(), 0, p);
+}
+
+static void rt_tls_release(TCCRunTLS *t)
+{
+    if (!t)
+        return;
+    p_FlsFree(t->fls);  /* runs rt_tls_free_block for the remaining blocks */
+    TlsFree(t->tls);    /* clears the slot in every thread */
+    tcc_free(t);
+}
+
+/* Emit the trampoline: save the registers the C calling convention lets
+   rt_tls_init() change, call rt_tls_init(t), restore, return. */
+static void rt_tls_tramp(TCCState *s1, TCCRunTLS *t)
+{
+    Section *sec = new_section(s1, ".text.tcctls", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR);
+    unsigned char *p;
+    int n;
+#if defined TCC_TARGET_X86_64
+    static const unsigned char code[] = {
+        0x55,                               /* push rbp */
+        0x48,0x89,0xe5,                     /* mov rbp,rsp */
+        0x50, 0x51, 0x52,                   /* push rax, rcx, rdx */
+        0x41,0x50, 0x41,0x51, 0x41,0x52, 0x41,0x53, /* push r8-r11 */
+        0x48,0x83,0xe4,0xf0,                /* and rsp,-16 */
+        0x48,0x81,0xec,0x80,0,0,0,          /* sub rsp,0x80: shadow + xmm0-5 */
+        0xf3,0x0f,0x7f,0x44,0x24,0x20,      /* movdqu [rsp+0x20],xmm0 */
+        0xf3,0x0f,0x7f,0x4c,0x24,0x30,
+        0xf3,0x0f,0x7f,0x54,0x24,0x40,
+        0xf3,0x0f,0x7f,0x5c,0x24,0x50,
+        0xf3,0x0f,0x7f,0x64,0x24,0x60,
+        0xf3,0x0f,0x7f,0x6c,0x24,0x70,      /* ... xmm5 */
+        0x48,0xb9, 0,0,0,0,0,0,0,0,         /* mov rcx,t (offset 64) */
+        0x48,0xb8, 0,0,0,0,0,0,0,0,         /* mov rax,rt_tls_init (offset 74) */
+        0xff,0xd0,                          /* call rax */
+        0xf3,0x0f,0x6f,0x44,0x24,0x20,      /* movdqu xmm0,[rsp+0x20] */
+        0xf3,0x0f,0x6f,0x4c,0x24,0x30,
+        0xf3,0x0f,0x6f,0x54,0x24,0x40,
+        0xf3,0x0f,0x6f,0x5c,0x24,0x50,
+        0xf3,0x0f,0x6f,0x64,0x24,0x60,
+        0xf3,0x0f,0x6f,0x6c,0x24,0x70,
+        0x48,0x8d,0x65,0xc8,                /* lea rsp,[rbp-0x38] */
+        0x41,0x5b, 0x41,0x5a, 0x41,0x59, 0x41,0x58, /* pop r11-r8 */
+        0x5a, 0x59, 0x58,                   /* pop rdx, rcx, rax */
+        0x5d,                               /* pop rbp */
+        0xc3                                /* ret */
+    };
+    p = section_ptr_add(sec, n = sizeof code);
+    memcpy(p, code, n);
+    write64le(p + 64, (uint64_t)(uintptr_t)t);
+    write64le(p + 74, (uint64_t)(uintptr_t)rt_tls_init);
+#elif defined TCC_TARGET_I386
+    static const unsigned char code[] = {
+        0x60,                               /* pushad */
+        0x68, 0,0,0,0,                      /* push t (offset 2) */
+        0xb8, 0,0,0,0,                      /* mov eax,rt_tls_init (offset 7) */
+        0xff,0xd0,                          /* call eax */
+        0x83,0xc4,0x04,                     /* add esp,4 */
+        0x61,                               /* popad */
+        0xc3                                /* ret */
+    };
+    p = section_ptr_add(sec, n = sizeof code);
+    memcpy(p, code, n);
+    write32le(p + 2, (uint32_t)(uintptr_t)t);
+    write32le(p + 7, (uint32_t)(uintptr_t)rt_tls_init);
+#elif defined TCC_TARGET_ARM64
+    /* save x0-x17 (0..143) and q0-q31 (144..655) in a 0x290 byte frame */
+    uint32_t w[80];
+    int i = 0, j;
+    w[i++] = 0xa9bf7bfd;                    /* stp x29,x30,[sp,#-16]! */
+    w[i++] = 0x910003fd;                    /* mov x29,sp */
+    w[i++] = 0xd10a43ff;                    /* sub sp,sp,#0x290 */
+    for (j = 0; j < 18; j += 2)             /* stp xj,xj+1,[sp,#8*j] */
+        w[i++] = 0xa9000000 | j << 15 | (j + 1) << 10 | 31 << 5 | j;
+    for (j = 0; j < 32; j += 2)             /* stp qj,qj+1,[sp,#144+16*j] */
+        w[i++] = 0xad000000 | (9 + j) << 15 | (j + 1) << 10 | 31 << 5 | j;
+    w[i++] = 0;                             /* ldr x0,=t (patched below) */
+    w[i++] = 0;                             /* ldr x16,=rt_tls_init */
+    w[i++] = 0xd63f0200;                    /* blr x16 */
+    for (j = 0; j < 32; j += 2)
+        w[i++] = 0xad400000 | (9 + j) << 15 | (j + 1) << 10 | 31 << 5 | j;
+    for (j = 0; j < 18; j += 2)
+        w[i++] = 0xa9400000 | j << 15 | (j + 1) << 10 | 31 << 5 | j;
+    w[i++] = 0x910a43ff;                    /* add sp,sp,#0x290 */
+    w[i++] = 0xa8c17bfd;                    /* ldp x29,x30,[sp],#16 */
+    w[i++] = 0xd65f03c0;                    /* ret */
+    if (i & 1)
+        w[i++] = 0xd503201f;                /* nop: 8-byte align the literals */
+    j = 3 + 9 + 16;                         /* index of the first ldr */
+    w[j]     = 0x58000000 | (i - j) << 5 | 0;           /* ldr x0,lit */
+    w[j + 1] = 0x58000000 | (i + 2 - (j + 1)) << 5 | 16; /* ldr x16,lit+8 */
+    p = section_ptr_add(sec, n = i * 4 + 16);
+    for (j = 0; j < i; j++)
+        write32le(p + 4 * j, w[j]);
+    write64le(p + 4 * i, (uint64_t)(uintptr_t)t);
+    write64le(p + 4 * i + 8, (uint64_t)(uintptr_t)rt_tls_init);
+#else
+#error "no thread-local storage trampoline for this target"
+#endif
+    sec->sh_addralign = 16;
+    t->sym.c = put_elf_sym(symtab_section, 0, n,
+        ELFW(ST_INFO)(STB_LOCAL, STT_FUNC), 0, sec->sh_num, "__tcc_tls_tramp");
+}
+
+/* called by the code generators for every thread-local access in in-memory
+   code; returns the TLS slot (below 64, so it is in TEB->TlsSlots), or -1
+   if no TLS or FLS slot is free (the caller reports the error) */
+ST_FUNC int tcc_run_tls(TCCState *s1, Sym **tramp)
+{
+    TCCRunTLS *t = s1->run_tls;
+    if (!t) {
+        DWORD i, f;
+        if (!p_FlsFree) {
+            HMODULE k = GetModuleHandleA("kernel32.dll");
+            *(FARPROC *)&p_FlsAlloc = GetProcAddress(k, "FlsAlloc");
+            *(FARPROC *)&p_FlsSetValue = GetProcAddress(k, "FlsSetValue");
+            *(FARPROC *)&p_FlsFree = GetProcAddress(k, "FlsFree");
+            if (!p_FlsAlloc || !p_FlsSetValue || !p_FlsFree) {
+                p_FlsFree = NULL;
+                return -1;
+            }
+        }
+        i = TlsAlloc();
+        if (i == TLS_OUT_OF_INDEXES || i >= 64) {
+            if (i != TLS_OUT_OF_INDEXES)
+                TlsFree(i);
+            return -1;
+        }
+        f = p_FlsAlloc(rt_tls_free_block);
+        if (f == FLS_OUT_OF_INDEXES) {
+            TlsFree(i);
+            return -1;
+        }
+        t = tcc_mallocz(sizeof *t);
+        t->tls = i, t->fls = f;
+        s1->run_tls = t;
+        rt_tls_tramp(s1, t);
+    }
+    *tramp = &t->sym;
+    return (int)t->tls;
+}
+
+#else
+# define rt_tls_release(t)
+#endif
+
 ST_FUNC void tcc_run_free(TCCState *s1)
 {
     int i;
@@ -209,6 +403,10 @@ ST_FUNC void tcc_run_free(TCCState *s1)
         if ( ref->handle )
             rt_free_dll(ref->handle);
     }
+#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+    rt_tls_release(s1->run_tls); /* also after a failed compile */
+    s1->run_tls = NULL;
+#endif
     if (NULL == s1->run_ptr)
         return;
     st_unlink(s1);
@@ -232,6 +430,9 @@ struct TCCCode {
     void **dlls;            /* modules loaded for this code */
     TCCCodeSym *syms;       /* global symbols, sorted by name */
     char leading_underscore;
+#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+    TCCRunTLS *tls;         /* thread-local storage, if the code has any */
+#endif
 };
 
 static int code_sym_cmp(const void *a, const void *b)
@@ -291,6 +492,9 @@ LIBTCCAPI TCCCode *tcc_detach(TCCState *s1)
 #ifdef _WIN64
     s1->run_function_table = NULL;
 #endif
+#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+    c->tls = s1->run_tls, s1->run_tls = NULL;
+#endif
     /* the state no longer has code: empty its symbol table */
     s->data_offset = s->link->data_offset = s->hash->data_offset = 0;
     init_symtab(s);
@@ -323,6 +527,9 @@ LIBTCCAPI void tcc_code_free(TCCCode *c)
     for (i = 0; i < c->nb_dlls; i++)
         rt_free_dll(c->dlls[i]);
     rt_release(c->ptr, c->size, c->function_table);
+#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+    rt_tls_release(c->tls);
+#endif
     tcc_free(c);
 }
 
@@ -475,14 +682,18 @@ redo:
     if (copy == 3)
         return 0;
 
-    for (k = 0; k < 3; ++k) { /* 0:rx, 1:ro, 2:rw sections */
+    /* 0:rx, 1:ro, 2:rw sections, 3:rw thread-local sections, last and
+       together: they are the template each thread's block is copied from */
+    for (k = 0; k < 4; ++k) {
         n = 0; addr = 0;
         for(i = 1; i < s1->nb_sections; i++) {
             static const char shf[] = {
-                SHF_ALLOC|SHF_EXECINSTR, SHF_ALLOC, SHF_ALLOC|SHF_WRITE
+                SHF_ALLOC|SHF_EXECINSTR, SHF_ALLOC, SHF_ALLOC|SHF_WRITE, SHF_ALLOC|SHF_WRITE
                 };
             s = s1->sections[i];
             if (shf[k] != (s->sh_flags & (SHF_ALLOC|SHF_WRITE|SHF_EXECINSTR)))
+                continue;
+            if ((k == 3) != !!(s->sh_flags & SHF_TLS))
                 continue;
             length = s->data_offset;
             if (copy == 2) {
@@ -505,8 +716,10 @@ redo:
                 continue;
             }
 
+#if !(defined TCC_TARGET_PE && defined TCC_IS_NATIVE)
             if ((s->sh_flags & SHF_TLS) && length)
                 return tcc_error_noabort("thread-local storage not supported with -run");
+#endif
 
             align = s->sh_addralign;
             if (++n == 1) {
@@ -526,6 +739,17 @@ redo:
             offset += -(addr + offset) & (align - 1);
             s->sh_addr = mem ? addr + offset : 0;
             offset += length;
+#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+            if (k == 3 && mem) {
+                /* thread-local offsets count from the first TLS section */
+                if (n == 1)
+                    s1->tls_start = s1->tls_end = s->sh_addr;
+                if (s1->run_tls) {
+                    s1->run_tls->tmpl = (void *)(uintptr_t)s1->tls_start;
+                    s1->run_tls->size = s->sh_addr + length - s1->tls_start;
+                }
+            }
+#endif
         }
         if (copy == 2) { /* set permissions */
             if (n == 0) /* no data  */

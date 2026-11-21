@@ -998,6 +998,9 @@ struct TCCState {
 #ifdef _WIN64
     void *run_function_table; /* unwind data */
 #endif
+#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+    struct TCCRunTLS *run_tls; /* thread-local storage of in-memory code */
+#endif
     struct TCCState *next;
     struct rt_context *rc; /* pointer to backtrace info block */
     void *run_lj, *run_jb; /* sj/lj for tcc_setjmp()/tcc_run() */
@@ -1828,6 +1831,11 @@ ST_FUNC const char *dlerror(void);
 ST_FUNC void *dlsym(void *handle, const char *symbol);
 #endif
 ST_FUNC void tcc_run_free(TCCState *s1);
+#ifdef TCC_TARGET_PE
+/* in-memory code: Win32 TLS slot holding the thread's block, and the
+   trampoline to call when it is still NULL (see tccrun.c) */
+ST_FUNC int tcc_run_tls(TCCState *s1, Sym **tramp);
+#endif
 #endif
 
 /* ------------ tcctools.c ----------------- */
