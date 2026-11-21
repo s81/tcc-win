@@ -49,7 +49,6 @@ ifeq (-$(CONFIG_WIN32)-,-yes-)
  SKIP += 117_builtins.test # win32 port doesn't define __builtins
  SKIP += 148_linker_symbols.test # ELF linker tests
  SKIP += 159_tls_run_posix.test # pthreads; 158_tls_run is the Windows one
- SKIP += 160_tlsdbg.test 161_tlsdbg.test 162_tlsdbg.test 163_tlsdbg.test 164_tlsdbg.test 165_tlsdbg.test 166_tlsdbg.test 167_tlsdbg.test 168_tlsdbg.test 169_tlsdbg.test # DEBUG, temporary
 endif
 ifeq (,$(filter x86_64 i386 arm64,$(ARCH)))
  SKIP += 159_tls_run_posix.test # TLS in -run: x86_64, i386 and arm64 only

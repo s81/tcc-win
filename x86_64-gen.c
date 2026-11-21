@@ -403,6 +403,15 @@ static void gen_modrm32(int opcode, int op_reg, int r, Sym *sym, int c)
     gen_modrm_impl(opcode, 0, op_reg, r, sym, c);
 }
 
+/* The code that reaches a thread-local variable (a stub call in memory, a
+   segment prefix or some instructions elsewhere) cannot be emitted after the
+   prefix bytes of an SSE instruction: such an operand is loaded into a
+   register first. */
+static int tls_mem_operand(SValue *sv)
+{
+    return (sv->r & VT_SYM) && sv->sym && (sv->sym->type.t & VT_TLS);
+}
+
 /* load 'r' from value 'sv' */
 void load(int r, SValue *sv)
 {
@@ -1966,6 +1975,10 @@ void gen_opf(int op)
                 vtop->r = r = r | VT_LVAL;
             }
 
+            if (tls_mem_operand(vtop)) {
+                gv(RC_FLOAT);
+                fc = vtop->c.i;
+            }
             if (op == TOK_EQ || op == TOK_NE) {
                 swapped = 0;
             } else {
@@ -2029,6 +2042,10 @@ void gen_opf(int op)
                 vtop->r = r | VT_LVAL;
             }
             
+            if (!swapped && tls_mem_operand(vtop)) {
+                gv(RC_FLOAT);
+                fc = vtop->c.i;
+            }
             assert(!(vtop[-1].r & VT_LVAL));
             if (swapped) {
                 assert(vtop->r & VT_LVAL);
