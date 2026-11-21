@@ -50,6 +50,8 @@ int main(void)
     int i, distinct = 1;
 
     CHK(ti == 7 && tz == 0 && td == 2.5 && !strcmp(tbuf, "init"));
+    /* a thread-local double as the right operand of SSE arithmetic and compare */
+    CHK(ti * td == 17.5 && 1 + td == 3.5 && 2.5 == td && td > 2 && td - 1 == 1.5);
     ti = -1, tz = 5, td = 0.25, strcpy(tbuf, "main"), ts.a = -11;
     CHK(counter() == 101 && counter() == 102);
     addr[8] = &ti;
