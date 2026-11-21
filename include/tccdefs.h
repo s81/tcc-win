@@ -80,18 +80,6 @@
     # define __STDC_EMBED_NOT_FOUND__ 0
     # define __STDC_EMBED_FOUND__ 1
     # define __STDC_EMBED_EMPTY__ 2
-    # define __has_c_attribute(x) __TCC_C_ATTR_##x
-    # define __TCC_C_ATTR_deprecated 201904L
-    # define __TCC_C_ATTR_fallthrough 201910L
-    # define __TCC_C_ATTR_maybe_unused 202106L
-    # define __TCC_C_ATTR_nodiscard 202003L
-    # define __TCC_C_ATTR_noreturn 202202L
-    # define __TCC_C_ATTR__Noreturn 202202L
-    # define __TCC_C_ATTR_unsequenced 202207L
-    # define __TCC_C_ATTR_reproducible 202207L
-    # define __TCC_C_ATTR_owner 202311L
-    # define __TCC_C_ATTR_borrow 202311L
-    # define __TCC_C_ATTR_borrow_mut 202311L
     # define __TCC_OWNERSHIP__ 1
     # define __BITINT_MAXWIDTH__ 64
     #endif
@@ -99,10 +87,9 @@
     # define __STDC_NO_ATOMICS__ 1
     # define __STDC_NO_COMPLEX__ 1
     # define __STDC_NO_THREADS__ 1
-#if !defined _WIN32
+    /* u"" strings are UTF-16 and U"" strings UTF-32 on every target */
     # define __STDC_UTF_16__ 1
     # define __STDC_UTF_32__ 1
-#endif
     #endif
 
 #if defined _WIN32

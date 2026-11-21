@@ -1643,6 +1643,39 @@ static int parse_include(TCCState *s1, int do_next, int test)
 }
 
 /* eval an expression for #if/#elif */
+/* value of __has_c_attribute(): 0 if the attribute is not supported. Only the
+   standard attributes and those with the 'tcc' prefix are known; attributes of
+   other vendors (gnu::, clang::, ...) are parsed but ignored, so they report 0. */
+static int pp_c_attribute(int scope, int name)
+{
+    static const struct { const char *name; int value; } tab[] = {
+        { "deprecated", 201904 }, { "fallthrough", 201910 },
+        { "maybe_unused", 202106 }, { "nodiscard", 202003 },
+        { "noreturn", 202202 }, { "_Noreturn", 202202 },
+        { "unsequenced", 202207 }, { "reproducible", 202207 },
+        { "owner", 202311 }, { "borrow", 202311 }, { "borrow_mut", 202311 },
+    };
+    const char *s = get_tok_str(name, NULL);
+    char buf[40];
+    size_t n = strlen(s);
+    int i;
+
+    if (scope) {
+        const char *sc = get_tok_str(scope, NULL);
+        if (strcmp(sc, "tcc") && strcmp(sc, "__tcc__"))
+            return 0;
+    }
+    if (n > 4 && n < sizeof buf && !memcmp(s, "__", 2) && !memcmp(s + n - 2, "__", 2)) {
+        memcpy(buf, s + 2, n - 4);
+        buf[n - 4] = 0;
+        s = buf;
+    }
+    for (i = 0; i < (int)(sizeof tab / sizeof tab[0]); ++i)
+        if (!strcmp(s, tab[i].name))
+            return tab[i].value;
+    return 0;
+}
+
 static int expr_preprocess(TCCState *s1)
 {
     int c, t;
@@ -1675,6 +1708,7 @@ static int expr_preprocess(TCCState *s1)
             if (define_find(tok)
                 || tok == TOK___HAS_INCLUDE
                 || tok == TOK___HAS_EMBED
+                || tok == TOK___HAS_C_ATTRIBUTE
                 || tok == TOK___HAS_INCLUDE_NEXT)
                 c = 1;
             if (t == '(') {
@@ -1688,6 +1722,33 @@ static int expr_preprocess(TCCState *s1)
 	    if (tok != '(')
 		expect("'('");
             c = pp_embed(s1, 1);
+            goto c_number;
+        } else if (tok == TOK___HAS_C_ATTRIBUTE) {
+            /* __has_c_attribute([scope ::] name) */
+            int scope = 0, name;
+            parse_flags &= ~PARSE_FLAG_PREPROCESS;
+            next();
+            if (tok != '(')
+                expect("'('");
+            next();
+            if (tok < TOK_IDENT)
+                expect("attribute name");
+            name = tok;
+            next();
+            if (tok == ':') {
+                next();
+                if (tok != ':')
+                    expect("':'");
+                next();
+                if (tok < TOK_IDENT)
+                    expect("attribute name");
+                scope = name, name = tok;
+                next();
+            }
+            parse_flags |= PARSE_FLAG_PREPROCESS;
+            if (tok != ')')
+                expect("')'");
+            c = pp_c_attribute(scope, name);
             goto c_number;
         } else if (tok == TOK___HAS_INCLUDE ||
                    tok == TOK___HAS_INCLUDE_NEXT) {
@@ -2070,6 +2131,7 @@ ST_FUNC void preprocess(int is_bof)
         }
         if (define_find(tok)
             || tok == TOK___HAS_INCLUDE
+            || tok == TOK___HAS_C_ATTRIBUTE
             || tok == TOK___HAS_INCLUDE_NEXT)
             c ^= 1;
         next_nomacro();
@@ -2109,6 +2171,7 @@ ST_FUNC void preprocess(int is_bof)
                         n == TOK_ELIFNDEF ? "n" : "");
                 c = define_find(tok) || tok == TOK___HAS_INCLUDE
                     || tok == TOK___HAS_EMBED
+                    || tok == TOK___HAS_C_ATTRIBUTE
                     || tok == TOK___HAS_INCLUDE_NEXT;
                 if (n == TOK_ELIFNDEF)
                     c ^= 1;
@@ -3603,6 +3666,7 @@ static int macro_subst(
    tokens, otherwise it becomes the (empty) variable argument itself so
    that '#' and '##' next to it behave as with an empty argument. */
 static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args);
+static inline int *macro_twosharps(const int *ptr0);
 
 static int *macro_va_opt(Sym **nested_list, const int *macro_str, Sym *args)
 {
@@ -3655,10 +3719,12 @@ static int *macro_va_opt(Sym **nested_list, const int *macro_str, Sym *args)
                 tok_str_add2(&str, t, &cval);
         }
         if (strfy) {
-            int *res;
+            int *res, *res0;
             const int *st;
             tok_str_add(&in, 0);
-            st = res = macro_arg_subst(nested_list, in.str, args);
+            res0 = macro_arg_subst(nested_list, in.str, args);
+            st = res = macro_twosharps(res0); /* apply '##' before stringizing */
+            tok_str_free_str(res0);
             cstr_reset(&tokcstr);
             cstr_ccat(&tokcstr, '\"');
             while (*st) {
