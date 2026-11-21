@@ -63,13 +63,23 @@ extern long double strtold (const char *__nptr, char **__endptr);
 #  include <stdint.h>
 # endif
 # define inline __inline
-# define snprintf _snprintf
-# define vsnprintf _vsnprintf
+/* keep the C99 versions when the headers already map these names
+   (tcc-win's own headers do in C23 mode) */
+# ifndef snprintf
+#  define snprintf _snprintf
+# endif
+# ifndef vsnprintf
+#  define vsnprintf _vsnprintf
+# endif
 # ifndef __GNUC__
 #  define strtold (long double)strtod
 #  define strtof (float)strtod
-#  define strtoll _strtoi64
-#  define strtoull _strtoui64
+#  ifndef strtoll
+#   define strtoll _strtoi64
+#  endif
+#  ifndef strtoull
+#   define strtoull _strtoui64
+#  endif
 # endif
   /* some compilers don't know ldexpl and windows doesn't have long doubles anyway */
 # undef ldexpl
