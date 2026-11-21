@@ -147,6 +147,63 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label);
 static CType *type_decl(CType *type, AttributeDef *ad, int *v, int td);
 static void parse_expr_type(CType *type);
 static void init_putv(init_params *p, CType *type, unsigned long c);
+/* element size in bytes of a string literal token */
+static int str_tok_elsize(int t)
+{
+    switch (t) {
+    case TOK_U16STR: return 2;
+    case TOK_U32STR: return 4;
+    case TOK_LSTR: return sizeof(nwchar_t);
+    default: return 1;
+    }
+}
+
+/* can a string literal token initialize an array with element type t1 ? */
+static int str_elem_ok(int t, CType *t1)
+{
+    int bt = t1->t & VT_BTYPE;
+    switch (t) {
+    case TOK_U16STR: return bt == VT_SHORT;
+    case TOK_U32STR: return bt == VT_INT;
+    case TOK_LSTR:
+#ifdef TCC_TARGET_PE
+        return bt == VT_SHORT && (t1->t & VT_UNSIGNED);
+#else
+        return bt == VT_INT;
+#endif
+    default: return bt == VT_BYTE;
+    }
+}
+
+/* append the narrow (UTF-8) string src to dst as elements of size es (2 or 4),
+   including the terminator; return the number of elements added */
+static int str_widen(CString *dst, const char *src, int size, int es)
+{
+    const unsigned char *p = (const unsigned char *)src, *e = p + size;
+    int n = 0;
+    while (p < e) {
+        unsigned c = *p++;
+        int cont = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+        if (c >= 0xC0 && p + cont <= e) {
+            c &= 0x3f >> cont;
+            while (cont--)
+                c = (c << 6) | (*p++ & 0x3f);
+        }
+        if (es == 2 && c >= 0x10000) {
+            unsigned short u[2];
+            c -= 0x10000;
+            u[0] = (c >> 10) + 0xD800, u[1] = (c & 0x3FF) + 0xDC00;
+            cstr_cat(dst, (char *)u, 4), n += 2;
+        } else if (es == 2) {
+            unsigned short u = c;
+            cstr_cat(dst, (char *)&u, 2), n++;
+        } else {
+            cstr_cat(dst, (char *)&c, 4), n++;
+        }
+    }
+    return n;
+}
+
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags);
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r, int has_init, int v, int scope);
 static int decl(int l);
@@ -7907,8 +7964,16 @@ ST_FUNC void unary(void)
     case TOK_LCHAR:
 #ifdef TCC_TARGET_PE
         t = VT_SHORT|VT_UNSIGNED;
-        goto push_tokc;
+#else
+        t = VT_INT;
 #endif
+        goto push_tokc;
+    case TOK_C16CHAR: /* char16_t */
+        t = VT_SHORT | VT_UNSIGNED;
+        goto push_tokc;
+    case TOK_C32CHAR: /* char32_t */
+        t = VT_INT | VT_UNSIGNED;
+        goto push_tokc;
     case TOK_CU8CHAR: /* C23: unsigned char */
         t = VT_BYTE | VT_UNSIGNED | VT_DEFSIGN;
         goto push_tokc;
@@ -7983,6 +8048,15 @@ ST_FUNC void unary(void)
 #else
         t = VT_INT;
 #endif
+        goto str_init;
+    case TOK_U8STR: /* char8_t */
+        t = VT_BYTE | VT_UNSIGNED | VT_DEFSIGN;
+        goto str_init;
+    case TOK_U16STR: /* char16_t */
+        t = VT_SHORT | VT_UNSIGNED;
+        goto str_init;
+    case TOK_U32STR: /* char32_t */
+        t = VT_INT | VT_UNSIGNED;
         goto str_init;
     case TOK_STR:
     case_TOK_STR:
@@ -10634,7 +10708,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
 	/* In case of strings we have special handling for arrays, so
 	   don't consume them as initializer value (which would commit them
 	   to some anonymous symbol).  */
-	tok != TOK_LSTR && tok != TOK_STR && tok != '[' && tok != '.' &&
+	!TOK_IS_STR(tok) && tok != '[' && tok != '.' &&
 	(!(flags & DIF_SIZE_ONLY)
             /* a struct may be initialized from a struct of same type, as in
                     struct {int x,y;} a = {1,2}, b = {3,4}, c[] = {a,b};
@@ -10687,7 +10761,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
 
     if (type->t & VT_ARRAY) {
         no_oblock = 1;
-        if (((flags & DIF_FIRST) && tok != TOK_LSTR && tok != TOK_STR) ||
+        if (((flags & DIF_FIRST) && !TOK_IS_STR(tok)) ||
             tok == '{') {
             skip('{');
             no_oblock = 0;
@@ -10700,32 +10774,34 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
 
         /* only parse strings here if correct type (otherwise: handle
            them as ((w)char *) expressions */
-        if ((tok == TOK_LSTR && 
-#ifdef TCC_TARGET_PE
-             (t1->t & VT_BTYPE) == VT_SHORT && (t1->t & VT_UNSIGNED)
-#else
-             (t1->t & VT_BTYPE) == VT_INT
-#endif
-            ) || (tok == TOK_STR && (t1->t & VT_BTYPE) == VT_BYTE)) {
-	    len = 0;
+        if (TOK_IS_STR(tok) && str_elem_ok(tok, t1)) {
+            int cur = tok, es = str_tok_elsize(cur);
+            len = 0;
             cstr_reset(&initstr);
-            if (size1 != (tok == TOK_STR ? 1 : sizeof(nwchar_t)))
+            if (size1 != es)
               tcc_error("unhandled string literal merging");
-            while (tok == TOK_STR || tok == TOK_LSTR) {
+            while (TOK_IS_STR(tok)) {
+                int te = str_tok_elsize(tok);
                 if (initstr.size)
-                  initstr.size -= size1;
-                if (tok == TOK_STR)
-                  len += tokc.str.size;
-                else
-                  len += tokc.str.size / sizeof(nwchar_t);
+                  initstr.size -= es; /* drop the previous terminator */
+                if (te != es) {
+                    if (te != 1)
+                        tcc_error("unsupported concatenation of string literals with different prefixes");
+                    /* narrow literal after a wide one: widen it */
+                    len += str_widen(&initstr, tokc.str.data, tokc.str.size, es);
+                } else {
+                    len += tokc.str.size / es;
+                    cstr_cat(&initstr, tokc.str.data, tokc.str.size);
+                }
                 len--;
-                cstr_cat(&initstr, tokc.str.data, tokc.str.size);
+                if (cur == TOK_STR && tok == TOK_U8STR)
+                    cur = tok;
                 next();
             }
             if (tok != ')' && tok != '}' && tok != ',' && tok != ';'
                 && tok != TOK_EOF) {
                 /* Not a lone literal but part of a bigger expression.  */
-                unget_tok(size1 == 1 ? TOK_STR : TOK_LSTR);
+                unget_tok(cur);
                 tokc.str.size = initstr.size;
                 tokc.str.data = initstr.data;
                 goto do_init_array;
@@ -10759,8 +10835,10 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
                           ch = 0;
                         } else if (size1 == 1)
                           ch = ((unsigned char *)initstr.data)[i];
+                        else if (size1 == 2)
+                          ch = ((unsigned short *)initstr.data)[i];
                         else
-                          ch = ((nwchar_t *)initstr.data)[i];
+                          ch = ((int *)initstr.data)[i];
                         vpushi(ch);
                         init_putv(p, t1, c + i * size1);
                     }
@@ -10866,7 +10944,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
 	    /* This should happen only when we haven't parsed
 	       the init element above for fear of committing a
 	       string constant to memory too early.  */
-	    if (tok != TOK_STR && tok != TOK_LSTR)
+	    if (!TOK_IS_STR(tok))
 	      expect("string constant");
 	    parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
 	}
@@ -10959,7 +11037,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
         if (has_init == 2) {
             /* only get strings */
             init_str = tok_str_alloc();
-            while (tok == TOK_STR || tok == TOK_LSTR) {
+            while (TOK_IS_STR(tok)) {
                 tok_str_add_tok(init_str);
                 next();
             }

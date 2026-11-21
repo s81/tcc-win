@@ -28,6 +28,7 @@ check_ok() { # dir file [flags]
 check_ok "$top/tests/c23" c23_features.c -w  # uses [[deprecated]] entities
 check_ok "$top/tests/c23" c23_more.c -w
 check_ok "$top/tests/c23" c23_bitint.c
+check_ok "$top/tests/c23" c23_utf_literals.c -Wall
 check_ok "$top/tests/c23" c23_constexpr.c
 check_ok "$top/tests/c23" c23_audit_fixes.c -Wall
 check_ok "$top/tests/c23" c23_runtime.c
