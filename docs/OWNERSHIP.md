@@ -141,6 +141,19 @@ itself, since `malloc` and the other allocation functions below are declared
 `[[owner]]`. A cast to `void` (`(void)malloc(n);`) marks an intended discard
 and is accepted.
 
+Passing such a result directly as an argument for a parameter that does not
+take ownership loses it too, and is an error as well:
+
+```c
+size_t n = strlen(strdup(s));   // error: result of 'strdup' is an owner and is passed
+                                // to a parameter that does not take ownership (leak)
+printf("%s\n", strdup(s));      // error (variadic arguments take nothing)
+free(strdup(s));                // ok: free takes ownership
+take(make());                   // ok for void take([[owner]] char *p)
+```
+
+A `[[borrow]]` parameter does not take ownership either.
+
 ```
 f.c:5: error: result of 'malloc' is an owner and is discarded (leak): release or keep it, or cast it to void
 ```
@@ -257,6 +270,7 @@ line of the last one in the source is given.
 | `cannot pass shared borrow 's' as mutable borrow` | shared borrows are read-only |
 | `'a' and 'b' are passed to the same call and one of them is a mutable borrow (aliasing)` | two arguments refer to the same object |
 | `result of 'f' is an owner and is discarded (leak)` | an `[[owner]]` result (e.g. `malloc(n);`) is thrown away |
+| `result of 'f' is an owner and is passed to a parameter that does not take ownership (leak)` | e.g. `strlen(strdup(s))` |
 | `cannot move out of borrow 'v'` | a borrow does not own the resource |
 | `cannot return borrow 'v' of local owner 'p'` | the result would dangle |
 | `'q' does not live long enough: it is still borrowed by 'v'` | the borrow is used after the owner `q` went out of scope |
@@ -556,9 +570,10 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
-- A discarded `[[owner]]` result is only detected in an expression
-  statement (`make();`); `strlen(strdup(s))` and other uses that drop it are
-  not reported.
+- A discarded `[[owner]]` result is detected in an expression statement
+  (`make();`) and as an argument for a parameter that does not take
+  ownership (`strlen(strdup(s))`); other uses that drop it (`strdup(s)[0]`,
+  `if (malloc(n))`, an argument behind a cast) are not reported.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
   and array element counts as one).
