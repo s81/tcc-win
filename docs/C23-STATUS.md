@@ -16,7 +16,7 @@ C17. It is not exhaustive: optional features (decimal floating point
 |---|---|
 | `nullptr`, `nullptr_t` | `nullptr_t` in `<stddef.h>` |
 | `constexpr` | scalars; members and elements of structs, unions and arrays |
-| `auto` type inference, `typeof`, `typeof_unqual` | also with an unnamed struct or union (`auto q = (struct {int a;}){1};`) |
+| `auto` type inference, `typeof`, `typeof_unqual` | the initializer may define a struct, union or enum without a tag, or a pointer to one (`auto q = (struct {int a;}){1};`, `auto e = (enum {A, B})1;`) |
 | Non-ASCII letters in identifiers | UTF-8 in source. Symbols, punctuation, spaces, emoji and private-use characters are rejected ("character U+XXXX is not allowed in an identifier"). tcc has no Unicode property tables, so this is a list of ranges that are certainly not `XID_Start`/`XID_Continue`; some non-identifier characters are still accepted. Universal character names (`\u00e9`, `\U000000E9`) are accepted in identifiers and name the same identifier as the UTF-8 spelling; one that names a surrogate, a character above U+10FFFF or a basic character (below U+00A0, other than `$`, `@`, `` ` ``) is an error |
 | `bool`, `true`, `false`, `alignas`, `alignof`, `static_assert`, `thread_local` as keywords | `true`/`false` have type `bool` |
 | `static_assert` without a message | |
