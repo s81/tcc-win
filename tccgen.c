@@ -11270,7 +11270,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     if (type->t & VT_VLA) {
         int a;
 
-        int vla_zero = 0;
+        int vla_zero = 0, vla_data;
 
         if (has_init) {
             /* C23: a variable length array may be initialized with {} */
@@ -11301,14 +11301,16 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 #if defined TCC_TARGET_PE && defined TCC_TARGET_X86_64
         /* on _WIN64, because of the function args scratch area, the
            result of alloca differs from RSP and is returned in RAX.  */
-        gen_vla_result(addr), addr = (loc -= PTR_SIZE);
+        gen_vla_result(addr), vla_data = addr, addr = (loc -= PTR_SIZE);
+#else
+        vla_data = addr;
 #endif
         gen_vla_sp_save(addr);
         cur_scope->vla.loc = addr;
         cur_scope->vla.num++;
         if (vla_zero) {
             vpush_helper_func(TOK_memset);
-            vset(&char_pointer_type, VT_LOCAL | VT_LVAL, addr);
+            vset(&char_pointer_type, VT_LOCAL | VT_LVAL, vla_data);
             vpushi(0);
             vpush_type_size(type, &a);
 #if defined TCC_TARGET_ARM && defined TCC_ARM_EABI
