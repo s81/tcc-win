@@ -159,6 +159,9 @@ size_t n = strlen(strdup(s));   // error: result of 'strdup' is an owner and is 
                                 // to a parameter that does not take ownership (leak)
 printf("%s\n", strdup(s));      // error (variadic arguments take nothing)
 strlen((char *)strdup(s));      // error (a cast does not hide it)
+x = (uintptr_t)malloc(n);       // error: lost in an expression (an integer
+                                // is not tracked)
+x = (f(), malloc(n));           // ok: kept in x; but 'malloc(n), f()' is an error
 c = strdup(s)[0];               // error: result of 'strdup' is an owner and is lost
                                 // in an expression (leak)
 if (malloc(n)) ...              // error
@@ -176,8 +179,41 @@ f.c:5: error: result of 'malloc' is an owner and is discarded (leak): release or
 ```
 
 `malloc` and the other allocation functions listed under *Declaring owners
-and borrows* return an owner. Once the result is kept in a variable, it is
-only tracked further if that variable is an `[[owner]]`.
+and borrows* return an owner.
+
+### Plain pointers that keep an owner result
+
+A plain (not `[[owner]]`) local pointer that is initialized or assigned
+from an owner result becomes an *implicit owner*. It must be released or
+handed away before it goes out of scope, like an `[[owner]]`, but much more
+counts as handing it away, so that ordinary C code stays valid:
+
+- passing it to `free`, `realloc` or any `[[owner]]` parameter;
+- returning it, or storing it anywhere (`n->name = p;`, `global = p;`,
+  `q = p;`, `*out = p;`);
+- passing it to any function not known to keep no pointer (`keep(p);`);
+- taking its address (`&p`).
+
+Reading through it (`p[0]`, `*p`, `p->x`) and passing it to a function of
+the C library that keeps no pointer to its arguments (the `str*`/`mem*`
+functions, the `printf` and `scanf` families, `puts`, `fputs`, `fwrite`,
+`fread`, `fgets`, `atoi`, `strto*`, `qsort`, `fopen`, ...) do not hand it
+away. A null test narrows it as for `[[owner]]` variables.
+
+```c
+void f(const char *s)
+{
+    char *p = strdup(s);
+    if (!p)
+        return;                 // ok: null
+    printf("%s\n", p);
+}                               // error: owner 'p' still owns a resource at end
+                                // of scope (leak): release or move it (acquired at line 3)
+```
+
+Overwriting it while it still owns the resource (`p = malloc(4); p =
+malloc(8);`) is an error too. Use after free is checked only for `[[owner]]`
+variables, not for implicit owners.
 
 ## Borrows
 
@@ -563,8 +599,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
 - Only plain variable names create moves and borrows. Expressions such as
   `p + 1`, `strchr(p, 'x')` or `(char *)s` are not tracked, and a borrow
   initialized from them is not connected to any owner.
-- Plain (unannotated) pointers are never checked, so `char *alias = p;` can
-  still dangle.
+- Plain (unannotated) pointers are only checked for leaks (see *Plain
+  pointers that keep an owner result*), never for use after free, so
+  `char *alias = p;` can still dangle.
 - With a shared borrow alive, writes through the owner itself (`p[0] = 1`)
   are not detected; only C's `const` protects writes through the borrow.
 - Liveness follows the source text, not the full control-flow graph, so it
@@ -586,10 +623,12 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
-- A lost `[[owner]]` result is detected as described under *Owner
-  results*; it is not reported when it is converted to an integer
-  (`(uintptr_t)malloc(n)`) or stored in a plain variable that is never
-  released.
+- Implicit owners (see *Plain pointers that keep an owner result*) are
+  only local, non-static pointer variables that receive the owner result
+  in the block where they are declared (`char *p; if (c) { p = malloc(n); }`
+  is not followed); struct fields, arrays and globals that receive an
+  owner result are not followed either. Aliases made by functions that return
+  their argument (`q = strcpy(p, s)`) count as a hand-off.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
   and array element counts as one).

@@ -1235,6 +1235,7 @@ static void depr_warn(Sym *sym)
 static int nd_call;
 /* same for a call whose result is an [[owner]]: discarding it is a leak */
 static int own_res_call;
+static int own_res_stored; /* own_res_call of the value of the last store */
 
 /* Merge symbol attributes.  */
 static void merge_symattr(struct SymAttr *sa, struct SymAttr *sa1)
@@ -3585,8 +3586,10 @@ static void gen_cast(CType *type)
     nd_call = 0;
     /* an owner result keeps being one through a cast to a pointer type
        ('(char *)malloc(n)'); '(void)f()' discards it on purpose */
-    if ((type->t & VT_BTYPE) != VT_PTR)
-        own_res_call = 0;
+    if ((type->t & VT_BTYPE) == VT_VOID)
+        own_res_call = 0; /* '(void)malloc(n)': discarded on purpose */
+    else if ((type->t & VT_BTYPE) != VT_PTR)
+        own_res_lost(); /* '(uintptr_t)malloc(n)' */
     if (((type->t | vtop->type.t) & VT_BITINT) && gen_cast_bitint(type))
         return;
 
@@ -4055,6 +4058,7 @@ ST_FUNC void vstore(void)
 {
     int sbt, dbt, ft, r, size, align, bit_size, bit_pos, delayed_cast;
 
+    own_res_stored = own_res_call; /* see own_impl_new() */
     nd_call = own_res_call = 0;
     ft = vtop[-1].type.t;
     sbt = vtop->type.t & VT_BTYPE;
@@ -4362,6 +4366,9 @@ struct own_var {
     int pin;       /* id of the loop the variable is used in, 0 if none */
     int decl_cond; /* own_cond at the declaration */
     unsigned char reported; /* an error about it was reported */
+    unsigned char impl; /* a plain pointer that got an [[owner]] result: only
+                           leaks are reported, any use that may keep a copy
+                           hands it on (see own_impl_new) */
     /* source lines for the diagnostics (0: unknown) */
     int own_line;  /* owner: where it got its current resource */
     int move_line; /* owner: where it was last moved */
@@ -4949,6 +4956,7 @@ static struct own_var *own_new(Sym *s, int kind, int st)
     o->brw_line = kind != OWN_OWNER && st == OWN_OWNED ? own_line_now() : 0;
     o->mgen = 0;
     o->rsym = NULL;
+    o->impl = 0;
     return o;
 }
 
@@ -5364,6 +5372,18 @@ static void own_use_o(struct own_var *o, int addrof)
         own_pending = o;
         return;
     }
+    if (o->impl && o->st != OWN_MOVED && addrof != 2 && tok != '['
+        && tok != TOK_ARROW && o != own_noesc) {
+        /* a plain pointer: any use other than '*p', 'p[i]', 'p->f', a null
+           test or an argument that is not kept may keep a copy, which then
+           owns the resource: not checked any more */
+        o->st = OWN_NULL;
+        return;
+    }
+    if (o->impl) {
+        own_read(o);
+        return; /* no use-after-move errors for plain pointers */
+    }
     if (addrof == 1 && tok != '[' && tok != TOK_ARROW && tok != '(') {
         /* '&p': may be (re)initialized via the pointer */
         own_conflicts_with(own_bit(o), 0, NULL,
@@ -5765,6 +5785,8 @@ static void own_assign(struct own_var *dst, struct own_var *src)
         own_move(src);
         dst->st = (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
                   && vtop->c.i == 0 ? OWN_NULL : OWN_OWNED;
+        if (dst->impl && !src && !own_res_call)
+            dst->st = OWN_NULL; /* not an owner value: not checked */
         if (dst->st == OWN_OWNED) /* a null value acquires nothing */
             dst->own_line = own_line_now();
         own_kids_reset(dst);
@@ -5833,6 +5855,63 @@ static void own_call_borrow(struct own_var *src, int kind)
         c->m[c->n] = m;
         c->k[c->n++] = kind;
     }
+}
+
+/* the plain local pointer 's' (not [[owner]]) gets the result of an
+   [[owner]] call ('char *p = malloc(n);', 'p = strdup(s);'): it is tracked
+   as an owner from here on, so that a resource that is neither released
+   nor handed on is reported as a leak.  Any use of 's' that may keep a copy
+   hands it on (see own_use_o).  Only in the scope that declares 's', so
+   that its tracking ends with it. */
+static struct own_var *own_impl_new(Sym *s)
+{
+    struct own_var *o;
+    if (!s || nocode_wanted || !local_stack || s->a.owner || s->a.borrow
+        || (s->r & (VT_VALMASK | VT_LVAL)) != (VT_LOCAL | VT_LVAL)
+        || (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR
+        || (s->type.t & (VT_STATIC | VT_EXTERN))
+        || s->sym_scope != local_scope || own_n >= OWN_MAX - OWN_RESERVE)
+        return NULL;
+    if ((o = own_find(s)))
+        return o;
+    o = own_new(s, OWN_OWNER, OWN_MOVED);
+    o->impl = 1;
+    s->a.own_impl = 1;
+    return o;
+}
+
+/* plain functions of the C library that do not keep a pointer argument
+   (nor return one into it that is kept: 'q = strcpy(p, s)' is not
+   followed): a plain pointer passed to them is not handed on */
+static int own_noretain(Sym *callee)
+{
+    static const char *const fn[] = {
+        "strlen", "strnlen", "strcmp", "strncmp", "strcasecmp", "strncasecmp",
+        "_stricmp", "_strnicmp", "strcoll", "strspn", "strcspn",
+        "strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove",
+        "memset", "memcmp", "wcslen", "wcscmp", "wcsncmp", "wcscpy",
+        "wcsncpy", "wcscat", "wmemcpy", "wmemset",
+        "printf", "fprintf", "sprintf", "snprintf", "vprintf", "vfprintf",
+        "vsprintf", "vsnprintf", "wprintf", "fwprintf", "swprintf",
+        "puts", "fputs", "fputws", "fwrite", "fread", "fgets", "fgetws",
+        "sscanf", "fscanf", "scanf", "swscanf",
+        "atoi", "atol", "atoll", "atof", "strtol", "strtoul", "strtoll",
+        "strtoull", "strtod", "strtof", "strtold",
+        "mbstowcs", "wcstombs", "mbtowc", "wctomb", "qsort",
+        "perror", "remove", "rename", "fopen", "write", "read", NULL };
+    const char *const *n, *name;
+    if (!callee)
+        return 0;
+    name = get_tok_str(callee->v, NULL);
+    /* win32 stdio.h maps printf to __tcc_printf, snprintf to __mingw_... */
+    if (!strncmp(name, "__tcc_", 6))
+        name += 6;
+    else if (!strncmp(name, "__mingw_", 8))
+        name += 8;
+    for (n = fn; *n; ++n)
+        if (!strcmp(name, *n))
+            return 1;
+    return 0;
 }
 
 /* an argument was parsed: if its value is the result of an [[owner]] call
@@ -6003,6 +6082,7 @@ static void own_loop_end(struct own_snap *pre, struct own_snap *acc,
     if (live)
         for (i = 0; i < pre->n && i < own_n; ++i)
             if (own_vars[i].kind == OWN_OWNER && pre->st[i] == OWN_OWNED
+                && !own_vars[i].impl
                 && (own_vars[i].st == OWN_MOVED || own_vars[i].st == OWN_MAYBE)) {
                 char at[48];
                 own_err(&own_vars[i], "owner '%s' is moved inside a loop (it would be"
@@ -8718,7 +8798,7 @@ special_math_val:
 
         if (s->a.deprecated)
             depr_warn(s);
-        if (s->a.owner || s->a.borrow || own_addrof
+        if (s->a.owner || s->a.borrow || own_addrof || s->a.own_impl
             || (own_n && (own_is_sv(s) || own_is_psv_type(&s->type))))
             own_use(s);
         r = s->r;
@@ -8819,6 +8899,7 @@ special_math_val:
             Sym *callee;
             TokenString *p, *p2;
             struct own_call ocall;
+            int noret;
 
             /* function call  */
             if ((vtop->type.t & VT_BTYPE) != VT_FUNC) {
@@ -8838,6 +8919,7 @@ special_math_val:
             s = vtop->type.ref;
             callee = (vtop->r & (VT_VALMASK|VT_LVAL|VT_SYM)) == (VT_CONST|VT_SYM)
                 ? vtop->sym : NULL;
+            noret = own_n && own_noretain(callee);
             next();
             sa = s->next; /* first parameter */
             nb_args = regsize = 0;
@@ -8896,12 +8978,15 @@ special_math_val:
                         skip_or_save_block(&p2);
                         p2->prev = p, p = p2;
                     } else {
-                        struct own_var *mv = sa && (sa->a.owner || sa->a.borrow)
-                                             ? own_peek(0) : NULL;
+                        struct own_var *mv = own_n ? own_peek(0) : NULL;
                         Sym *hp = own_peek_pp();
+                        if (mv && !(sa && (sa->a.owner || sa->a.borrow)) && !mv->impl)
+                            mv = NULL;
                         own_lending = sa && sa->a.borrow == OWN_MUT ? mv : NULL;
                         own_noesc = sa && sa->a.borrow == OWN_SHARED ? mv : NULL;
-                        if (mv && sa->a.owner)
+                        if (mv && mv->impl && (noret || (sa && (sa->a.owner || sa->a.borrow))))
+                            own_noesc = mv; /* not kept by the callee */
+                        if (mv && sa && sa->a.owner)
                             own_kids_check(mv, own_void_param(sa));
                         own_res_call = 0;
                         expr_eq();
@@ -8932,12 +9017,15 @@ special_math_val:
                     p2 = p->prev;
                     begin_macro(p, 1), next();
                     {
-                        struct own_var *mv = sa && (sa->a.owner || sa->a.borrow)
-                                             ? own_peek(0) : NULL;
+                        struct own_var *mv = own_n ? own_peek(0) : NULL;
                         Sym *hp = own_peek_pp();
+                        if (mv && !(sa && (sa->a.owner || sa->a.borrow)) && !mv->impl)
+                            mv = NULL;
                         own_lending = sa && sa->a.borrow == OWN_MUT ? mv : NULL;
                         own_noesc = sa && sa->a.borrow == OWN_SHARED ? mv : NULL;
-                        if (mv && sa->a.owner)
+                        if (mv && mv->impl && (noret || (sa && (sa->a.owner || sa->a.borrow))))
+                            own_noesc = mv; /* not kept by the callee */
+                        if (mv && sa && sa->a.owner)
                             own_kids_check(mv, own_void_param(sa));
                         own_res_call = 0;
                         expr_eq();
@@ -9406,6 +9494,12 @@ static void expr_eq(void)
         test_lvalue();
         next();
         if (t == '=') {
+            /* 'p = malloc(n)' for a plain local pointer 'p', see own_impl_new() */
+            Sym *isym = !dst && !nocode_wanted && vtop->sym
+                && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
+                && vtop->type.t == vtop->sym->type.t
+                && vtop->type.ref == vtop->sym->type.ref
+                && vtop->c.i == vtop->sym->c ? vtop->sym : NULL;
             mv = dst ? own_peek(0) : NULL;
             if (mv && dst->kind == OWN_OWNER)
                 own_kids_check(mv, 0);
@@ -9414,6 +9508,8 @@ static void expr_eq(void)
             own_lending = dst && dst->kind != OWN_OWNER ? mv : NULL;
             expr_eq();
             own_lending = NULL;
+            if (isym && own_res_call)
+                dst = own_impl_new(isym);
             if (dst)
                 own_check_overwrite(dst);
             own_assign(dst, mv);
@@ -9433,6 +9529,7 @@ ST_FUNC void gexpr(void)
     expr_eq();
     if (tok == ',') {
         do {
+            own_res_lost(); /* '(malloc(n), x)' */
             vpop();
             next();
             expr_eq();
@@ -12176,6 +12273,19 @@ static int decl(int l)
                                 : OWN_MOVED, has_ssrc && own_path_eq(&ssrc, &own_slast)
                                 ? &ssrc : NULL, list);
                             own_si = si0;
+                        } else if (has_init && r == (VT_LOCAL|VT_LVAL)
+                                   && (type.t & (VT_BTYPE|VT_ARRAY)) == VT_PTR
+                                   && !nocode_wanted) {
+                            /* 'char *p = malloc(n);': see own_impl_new() */
+                            struct own_var *io;
+                            own_res_stored = 0;
+                            decl_initializer_alloc(&type, &ad, r, has_init, v, l);
+                            if (own_res_stored && (io = own_impl_new(sym_find(v)))) {
+                                io->st = OWN_OWNED;
+                                io->own_line = own_line_now();
+                                own_rlink(io);
+                            }
+                            own_res_stored = 0;
                         } else
                         decl_initializer_alloc(&type, &ad, r, has_init, v, l);
                         cexpr_chk = 0;

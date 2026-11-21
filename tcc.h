@@ -544,7 +544,9 @@ struct SymAttr {
     thread      : 1, /* __declspec(thread), taken over by parse_btype */
     realloc     : 1, /* [[tcc::realloc]] parameter: an owner that is only
                         taken if the function returns non-null */
-    xxxx        : 8; /* not used */
+    own_impl    : 1, /* local pointer tracked as an owner because it got
+                        the result of an [[owner]] call ('p = malloc(n)') */
+    xxxx        : 7; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */
