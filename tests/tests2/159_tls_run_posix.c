@@ -13,6 +13,9 @@ _Thread_local int tz;
 __thread double td = 2.5;
 _Thread_local char tbuf[64] = "init";
 _Thread_local struct { int a; long long b; } ts = { 11, 1LL << 40 };
+/* over-aligned: the block of a thread must keep these alignments */
+_Alignas(64) _Thread_local char al64[64] = "a64";
+_Alignas(32) _Thread_local int al32 = 7;
 _Thread_local int *tp = &global;        /* a relocation inside the template */
 _Thread_local float tf[4] = { 1.5f, 2.5f, 3.5f, 4.5f };
 _Thread_local long long tl = 1LL << 50;
@@ -34,6 +37,7 @@ static void *worker(void *arg)
     /* a new thread sees the initial values, not the main thread's */
     CHK(ti == 7 && tz == 0 && td == 2.5 && !strcmp(tbuf, "init"));
     CHK(ts.a == 11 && ts.b == 1LL << 40);
+    CHK(((long)&al64 & 63) == 0 && ((long)&al32 & 31) == 0 && !strcmp(al64, "a64") && al32 == 7);
     CHK(*tp == 42 && tp == &global);
     CHK(tf[0] == 1.5f && tf[3] == 4.5f && tl == 1LL << 50);
     CHK(counter() == 101);

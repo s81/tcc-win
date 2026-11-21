@@ -221,7 +221,7 @@ static void rt_release(void *ptr, unsigned size, void *function_table)
 typedef struct TCCRunTLS {
     DWORD tls, fls;     /* Win32 TLS and FLS indexes */
     void *tmpl;         /* template: the TLS sections of the run image */
-    size_t size;
+    size_t size, align; /* its size, and the alignment of the block */
     Sym sym;            /* the trampoline, for relocations */
 } TCCRunTLS;
 
@@ -237,14 +237,17 @@ static BOOL (WINAPI *p_FlsFree)(DWORD);
 
 static void rt_tls_init(TCCRunTLS *t)
 {
-    void *p = HeapAlloc(GetProcessHeap(), 0, t->size ? t->size : 1);
+    char *p = HeapAlloc(GetProcessHeap(), 0, t->size + t->align), *q;
     if (!p) {
         fprintf(stderr, "tcc: out of memory for thread-local storage\n");
         abort();
     }
-    memcpy(p, t->tmpl, t->size);
+    /* the heap gives 16-byte alignment: the block starts at an aligned
+       address inside the allocation, which the FLS callback frees */
+    q = (char *)(((uintptr_t)p + t->align - 1) & ~(uintptr_t)(t->align - 1));
+    memcpy(q, t->tmpl, t->size);
     p_FlsSetValue(t->fls, p);
-    TlsSetValue(t->tls, p);
+    TlsSetValue(t->tls, q);
 }
 
 static void WINAPI rt_tls_free_block(void *p)
@@ -893,7 +896,7 @@ static int tcc_relocate_ex(TCCState *s1, void *ptr, unsigned ptr_diff)
     unsigned length, align, i, k, f;
     unsigned n, copy;
     addr_t mem, addr;
-#ifdef TCC_RUN_TLS_POSIX
+#ifdef TCC_RUN_TLS
     unsigned tls_align = 16; /* the largest alignment of a TLS section */
 
     for (i = 1; i < s1->nb_sections; i++)
@@ -962,7 +965,7 @@ redo:
 #endif
 
             align = s->sh_addralign;
-#ifdef TCC_RUN_TLS_POSIX
+#ifdef TCC_RUN_TLS
             if (k == 3) /* one alignment for all: offsets in a block are those in the template */
                 align = tls_align;
 #endif
@@ -991,9 +994,7 @@ redo:
                 if (s1->run_tls) {
                     s1->run_tls->tmpl = (void *)(uintptr_t)s1->tls_start;
                     s1->run_tls->size = s->sh_addr + length - s1->tls_start;
-#ifdef TCC_RUN_TLS_POSIX
                     s1->run_tls->align = tls_align;
-#endif
                 }
             }
 #endif

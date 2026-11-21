@@ -10,6 +10,9 @@ _Thread_local int tz;
 __declspec(thread) double td = 2.5;
 _Thread_local char tbuf[64] = "init";
 _Thread_local struct { int a; long long b; } ts = { 11, 1LL << 40 };
+/* over-aligned: the block of a thread must keep these alignments */
+_Alignas(64) _Thread_local char al64[64] = "a64";
+_Alignas(32) _Thread_local int al32 = 7;
 
 static int counter(void)
 {
@@ -30,6 +33,7 @@ static DWORD WINAPI worker(LPVOID arg)
     /* a new thread sees the initial values, not the main thread's */
     CHK(ti == 7 && tz == 0 && td == 2.5 && !strcmp(tbuf, "init"));
     CHK(ts.a == 11 && ts.b == 1LL << 40);
+    CHK(((INT_PTR)&al64 & 63) == 0 && ((INT_PTR)&al32 & 31) == 0 && !strcmp(al64, "a64") && al32 == 7);
     CHK(counter() == 101);
     addr[id] = &ti;
     for (i = 0; i < 1000; i++) {
