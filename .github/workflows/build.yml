@@ -148,6 +148,8 @@ jobs:
       run: ./configure && make
     - name: thread-local variables, also under -run
       run: make -k -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
+    - name: detached code with thread-local variables
+      run: make -C tests libtest_detach
 
   linux-i386:
     runs-on: ubuntu-24.04
@@ -160,3 +162,5 @@ jobs:
       run: setarch i386 sh -c './configure --cc="gcc -m32" --libpaths="{B}:/usr/lib32:/lib32" --crtprefix=/usr/lib32 && make'
     - name: thread-local variables, also under -run
       run: setarch i386 make -C tests/tests2 159_tls_run_posix.test
+    - name: detached code with thread-local variables
+      run: setarch i386 make -C tests libtest_detach

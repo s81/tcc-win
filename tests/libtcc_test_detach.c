@@ -11,6 +11,15 @@
 #include "libtcc.h"
 #ifdef _WIN32
 # include <windows.h>
+#else
+# include <pthread.h>
+# include <unistd.h>
+#endif
+
+/* thread-local variables in in-memory code: Windows, and ELF on x86_64, i386
+   and arm64 Linux (tccrun.c) */
+#if defined _WIN32 || (defined __linux__ && (defined __x86_64__ || defined __i386__ || defined __aarch64__))
+# define HAVE_TLS_RUN 1
 #endif
 
 static int argc_, fails, nerr;
@@ -75,13 +84,50 @@ static DWORD protect_of(void *p)
 }
 #endif
 
-#ifdef _WIN32
+#ifdef HAVE_TLS_RUN
+# ifndef _WIN32
+/* resident memory: a leaked 64 KB block per cycle shows up here */
+static size_t private_bytes(void)
+{
+    long pages = 0, resident = 0;
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (f) {
+        if (fscanf(f, "%ld %ld", &pages, &resident) != 2)
+            resident = 0;
+        fclose(f);
+    }
+    return (size_t)resident * (size_t)sysconf(_SC_PAGESIZE);
+}
+# endif
+
 static int (*tls_bump)(int);
 static volatile int tls_result;
+
+# ifdef _WIN32
 static DWORD WINAPI tls_thread(LPVOID arg)
 {
     tls_result = tls_bump((int)(INT_PTR)arg);
     return 0;
+}
+# else
+static void *tls_thread(void *arg)
+{
+    tls_result = tls_bump((int)(long)arg);
+    return NULL;
+}
+# endif
+
+/* run tls_bump(d) in a new thread and wait for it: tls_result */
+static void run_tls_thread(int d)
+{
+# ifdef _WIN32
+    HANDLE h = CreateThread(NULL, 0, tls_thread, (LPVOID)(INT_PTR)d, 0, NULL);
+    WaitForSingleObject(h, INFINITE), CloseHandle(h);
+# else
+    pthread_t t;
+    pthread_create(&t, NULL, tls_thread, (void *)(long)d);
+    pthread_join(t, NULL);
+# endif
 }
 #endif
 
@@ -227,7 +273,7 @@ int main(int argc, char **argv)
         }
     }
 
-#ifdef _WIN32
+#ifdef HAVE_TLS_RUN
     /* 7. thread-local variables in in-memory code: every thread starts from
        the initial value, and the per-thread blocks (64 KB each here) are
        freed when a thread exits and when the code is unloaded */
@@ -238,7 +284,6 @@ int main(int argc, char **argv)
             "int bump(int d) { pad[d & 0xffff] = 1; t += d; return t; }\n";
         size_t before = 0, grown;
         int bad = 0;
-        HANDLE h;
 
         s = mk(0, NULL);
         CHECK(tcc_compile_string(s, tls_prog) == 0);
@@ -248,8 +293,7 @@ int main(int argc, char **argv)
         tls_bump = c ? (int (*)(int))tcc_code_symbol(c, "bump") : NULL;
         CHECK(tls_bump && tls_bump(1) == 6 && tls_bump(1) == 7);
         if (tls_bump) {
-            h = CreateThread(NULL, 0, tls_thread, (LPVOID)10, 0, NULL);
-            WaitForSingleObject(h, INFINITE), CloseHandle(h);
+            run_tls_thread(10);
             CHECK(tls_result == 15);           /* a fresh copy: 5 + 10 */
             CHECK(tls_bump(0) == 7);           /* the main thread's copy is unchanged */
         }
@@ -265,8 +309,7 @@ int main(int argc, char **argv)
             if (!tls_bump || tls_bump(2) != 7) {
                 bad++;
             } else {
-                h = CreateThread(NULL, 0, tls_thread, (LPVOID)3, 0, NULL);
-                WaitForSingleObject(h, INFINITE), CloseHandle(h);
+                run_tls_thread(3);
                 bad += tls_result != 8;
             }
             tcc_delete(s);                     /* frees the main thread's block */
@@ -275,7 +318,13 @@ int main(int argc, char **argv)
         grown = private_bytes();
         grown = grown > before ? grown - before : 0;
         printf("tls: growth over 1000 cycles: %u KB\n", (unsigned)(grown / 1024));
-        CHECK(grown < 4 * 1024 * 1024);        /* a leaked block per cycle is 64 MB */
+        /* a leaked block per cycle is 64 MB; Linux measures resident memory,
+           which is noisier */
+#ifdef _WIN32
+        CHECK(grown < 4 * 1024 * 1024);
+#else
+        CHECK(grown < 16 * 1024 * 1024);
+#endif
     }
 #endif
 
