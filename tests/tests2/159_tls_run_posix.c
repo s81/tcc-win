@@ -24,8 +24,7 @@ static int counter(void)
 }
 
 static volatile int bad;
-#define MARK(n) (printf("M%d
-", n), fflush(stdout))
+#define MARK(n) (puts("M" #n), fflush(stdout))
 #define CHK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); bad = 1; } } while (0)
 
 static int *addr[9];
