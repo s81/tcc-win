@@ -530,7 +530,7 @@ static int rt_tls_stub(TCCState *s1, TCCRunTLS *t, int reg)
     /* x0-x17 saved at sp+0..143, q0-q31 at sp+144..655 */
     uint32_t w[80];
     int i = 0, j;
-    if (reg < 0 || reg > 17)
+    if (reg < 0 || (reg > 17 && reg != 30)) /* x30 is the generator's scratch register */
         return 0;
     w[i++] = 0xa9bf7bfd;                                /* stp x29,x30,[sp,#-16]! */
     w[i++] = 0x910003fd;                                /* mov x29,sp */
@@ -542,14 +542,29 @@ static int rt_tls_stub(TCCState *s1, TCCRunTLS *t, int reg)
     w[i++] = 0;                                         /* ldr x0,=t (patched below) */
     w[i++] = 0;                                         /* ldr x16,=rt_tls_get */
     w[i++] = 0xd63f0200;                                /* blr x16 */
-    w[i++] = 0xf90003e0 | reg << 10;                    /* str x0,[sp,#8*reg]: the result */
+    if (reg == 30)
+        w[i++] = 0xaa0003f1;                            /* mov x17,x0: the result */
+    else
+        w[i++] = 0xf90003e0 | reg << 10;                /* str x0,[sp,#8*reg]: the result */
     for (j = 0; j < 32; j += 2)
         w[i++] = 0xad400000 | (9 + j) << 15 | (j + 1) << 10 | 31 << 5 | j;
-    for (j = 0; j < 18; j += 2)
-        w[i++] = 0xa9400000 | j << 15 | (j + 1) << 10 | 31 << 5 | j;
-    w[i++] = 0x910a43ff;                                /* add sp,sp,#0x290 */
-    w[i++] = 0xa8c17bfd;                                /* ldp x29,x30,[sp],#16 */
-    w[i++] = 0xd65f03c0;                                /* ret */
+    if (reg == 30) {
+        /* the result goes to x30, so the return address travels in x16
+           (and x16, x17 are clobbered, as by any call) */
+        for (j = 0; j < 16; j += 2)                     /* ldp x0..x15 */
+            w[i++] = 0xa9400000 | j << 15 | (j + 1) << 10 | 31 << 5 | j;
+        w[i++] = 0xf9414ff0;                            /* ldr x16,[sp,#664]: the return address */
+        w[i++] = 0xf9414bfd;                            /* ldr x29,[sp,#656] */
+        w[i++] = 0x910a83ff;                            /* add sp,sp,#0x2a0 */
+        w[i++] = 0xaa1103fe;                            /* mov x30,x17 */
+        w[i++] = 0xd65f0200;                            /* ret x16 */
+    } else {
+        for (j = 0; j < 18; j += 2)
+            w[i++] = 0xa9400000 | j << 15 | (j + 1) << 10 | 31 << 5 | j;
+        w[i++] = 0x910a43ff;                            /* add sp,sp,#0x290 */
+        w[i++] = 0xa8c17bfd;                            /* ldp x29,x30,[sp],#16 */
+        w[i++] = 0xd65f03c0;                            /* ret */
+    }
     if (i & 1)
         w[i++] = 0xd503201f;                            /* nop: 8-byte align the literals */
     j = 3 + 9 + 16;                                     /* index of the first ldr */

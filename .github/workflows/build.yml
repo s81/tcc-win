@@ -147,7 +147,7 @@ jobs:
     - name: build (native arm64 Linux)
       run: ./configure && make
     - name: thread-local variables, also under -run
-      run: make -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
+      run: make -k -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
 
   linux-i386:
     runs-on: ubuntu-24.04
@@ -157,6 +157,6 @@ jobs:
     - name: install the 32-bit toolchain
       run: sudo apt-get update && sudo apt-get install -y gcc-multilib
     - name: build (32-bit x86 Linux; setarch makes uname report i686)
-      run: setarch i386 sh -c './configure --cc="gcc -m32" && make'
+      run: setarch i386 sh -c './configure --cc="gcc -m32" --crtprefix=/usr/lib32 --libpaths=/usr/lib32:/lib32 && make'
     - name: thread-local variables, also under -run
-      run: setarch i386 make -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
+      run: setarch i386 make -k -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
