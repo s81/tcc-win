@@ -28,6 +28,11 @@ C17. It is not exhaustive: optional features (decimal floating point
 | `f()` means `f(void)`; `f(...)`; `va_start(ap)` | old-style (K&R) definitions are an error (accepted with `-std=c17` or lower) |
 | binary literals, digit separators `'` | |
 | `u8` character constants | type `unsigned char`; one UTF-8 code unit |
+| `u'c'`, `U'c'`, `u"s"`, `U"s"` (C11) | `char16_t` is `unsigned short` (UTF-16), `char32_t` is `unsigned int` (UTF-32), on every target; `u8"s"` has `char8_t` (`unsigned char`) elements; adjacent literals concatenate, a plain one widens to the prefixed one; `__STDC_UTF_16__` and `__STDC_UTF_32__` are predefined everywhere |
+| `constexpr` initializers are range-checked | the value must be exactly representable in the object's type (`constexpr unsigned char c = 256;`, `constexpr float f = 0.1;`, `constexpr int i = 1.5;` are errors); also for members and elements |
+| `int a[n] = {};` | an empty initializer on a variable length array zeroes it; any other initializer is an error |
+| `##` inside `#__VA_OPT__(...)` | pasted before the result is stringized |
+| `__has_c_attribute([scope::]name)` | native, usable in any `#if`; `gnu::` and other vendor attributes are parsed and ignored, so they report 0; `tcc::` names report like the standard ones |
 | `_BitInt(N)`, `wb`/`uwb` suffixes | `BITINT_MAXWIDTH` is 64, the minimum C23 requires; N > 64 is not feasible in the single-pass code generator |
 | `#elifdef`, `#elifndef`, `#warning`, `__VA_OPT__`, `__has_include` | |
 | `#embed` with `limit`, `prefix`, `suffix`, `if_empty`; `__has_embed` | the resource name may come from a macro |
@@ -40,17 +45,21 @@ C17. It is not exhaustive: optional features (decimal floating point
 | `assert(...)` is variadic | commas, e.g. in compound literals, are allowed |
 | `INFINITY`, `NAN`, `*_IS_IEC_60559`, `*_NORM_MAX` in `<float.h>` | |
 | `FLT_SNAN`, `DBL_SNAN`, `LDBL_SNAN` in `<float.h>` | constant expressions from the builtins `__builtin_nans`, `__builtin_nansf`, `__builtin_nansl` (also `__builtin_nan*`, `__builtin_inf*`) |
-| `__STDC_VERSION_*_H__` = `202311L` | defined only in the headers that are complete: `<assert.h>`, `<float.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>`, `<math.h>` (Windows targets) |
+| `__STDC_VERSION_*_H__` = `202311L` | `<assert.h>`, `<fenv.h>`, `<float.h>`, `<inttypes.h>`, `<limits.h>`, `<math.h>`, `<setjmp.h>`, `<stdarg.h>`, `<stdatomic.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>`, `<stdlib.h>`, `<string.h>`, `<tgmath.h>`, `<time.h>` (the Windows-only ones on Windows targets) |
+| `FLT_TRUE_MIN`, `DBL_TRUE_MIN`, `LDBL_TRUE_MIN`, `*_DECIMAL_DIG`, `*_HAS_SUBNORM` in `<float.h>` | on Windows targets `LDBL_*` now describe the 53-bit `long double` that those targets really have (they described the x87 type before) |
 
 ## Language: gaps
 
-None found by this audit.
+None known. Deliberate differences: `goto` is rejected unless `-fgoto` is given
+(the ownership model needs structured control flow); `_Complex`, `_Decimal*`,
+threads and `_BitInt(N)` with N > 64 are optional or infeasible (see above).
 
 ## Headers: gaps
 
 | Gap | Observed |
 |---|---|
-| `__STDC_VERSION_*_H__` of `<stdlib.h>`, `<string.h>`, `<stdio.h>`, `<time.h>`, `<uchar.h>`, `<wchar.h>`, `<inttypes.h>`, `<setjmp.h>`, `<fenv.h>`, `<complex.h>`, `<tgmath.h>`, `<stdatomic.h>` | deliberately not defined: the macro states that the header is C23-complete, and these lack the library functions below (or were not audited) |
+| `__STDC_VERSION_*_H__` of `<stdio.h>`, `<uchar.h>`, `<wchar.h>`, `<complex.h>` | not defined: not audited against the standard's list |
+| `<complex.h>`, `<threads.h>` | absent: the features are optional (`__STDC_NO_COMPLEX__`, `__STDC_NO_THREADS__` are defined) |
 
 ## Library: supported
 
@@ -59,7 +68,10 @@ predates C11/C23. The following functions are provided by tcc-win's runtime
 library (`libtcc1.a`, sources `lib/c23rt.c` and `lib/c23math.c`) and declared in the shipped
 headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 `timespec_get` and `TIME_UTC`). Tested by `tests/c23/c23_runtime.c` and
-`tests/c23/c23_math2.c`, `tests/c23/c23_math3.c` and `tests/c23/c23_aligned.c`.
+`tests/c23/c23_math2.c`, `tests/c23/c23_math3.c` and `tests/c23/c23_aligned.c`;
+the C99/C11 additions at the end of the table by `tests/c23/c23_lib_c99.c`
+(compile and link on every host, run on Windows with `RUN=1
+tests/tccwin-tests.sh`) and, on the build host, `tests/c99rt-host.sh`.
 
 | Function(s) | Header | Notes |
 |---|---|---|
@@ -82,6 +94,19 @@ headers when `__STDC_VERSION__` is at least `202311L` (`201112L` for
 | C99 `fma`, `remquo`, `remainder`, `nearbyint`, `erf`, `erfc` (each with `f` and `l`), `atan2l`, `copysignl` | `<math.h>` | missing from msvcrt.dll; `fma` correctly rounded, `remquo`/`remainder` exact, `erf` within 2 ulps and `erfc` within about 10 ulps (built on msvcrt's `exp`) |
 | C99 `isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered`, `float_t`, `double_t`, `math_errhandling`, `MATH_ERRNO`, `MATH_ERREXCEPT` | `<math.h>` | were missing from the header; `math_errhandling` is `MATH_ERRNO` (msvcrt's functions set `errno`) |
 | `rint`, `lrint`, `llrint`, `trunc` (arm64) | `<math.h>` | the inline versions used x87 assembly and did not compile for arm64 |
+| `feclearexcept`, `fegetexceptflag`, `feraiseexcept`, `fesetexceptflag`, `fetestexcept`, `fegetround`, `fesetround`, `fegetenv`, `feholdexcept`, `fesetenv`, `feupdateenv`; C23 `fetestexceptflag`, `fegetmode`, `fesetmode`, `femode_t`, `FE_DFL_MODE` | `<fenv.h>` | `lib/c99fenv.c`: x87 control/status words and MXCSR together. `feraiseexcept` sets the status flags and does not trap |
+| `strtoimax`, `strtoumax`, `wcstoimax`, `wcstoumax`, `wcstoll`, `wcstoull`, `imaxdiv`, `lldiv` | `<inttypes.h>`, `<wchar.h>`, `<stdlib.h>` | declared before but missing from msvcrt |
+| `wcstof`, `wcstold` | `<wchar.h>` | `wcstod` converted to the type (like `strtof`/`strtold`, so `wcstof` rounds twice) |
+| `isblank`, `iswblank` | `<ctype.h>`, `<wctype.h>` | |
+| `quick_exit`, `at_quick_exit` (C11), `call_once`, `once_flag`, `ONCE_FLAG_INIT` (C23 moved them to `<stdlib.h>`) | `<stdlib.h>` | 32 handlers; `call_once` waits for a concurrent first call with `SwitchToThread` |
+| `TIME_MONOTONIC` base of `timespec_get`, `timespec_getres` | `<time.h>` | `QueryPerformanceCounter`; `TIME_ACTIVE` and `TIME_THREAD_ACTIVE` are not provided |
+| `strtol`, `strtoul`, `strtoll`, `strtoull`, `wcstol`, `wcstoul`, `wcstoll`, `wcstoull`, `strtoimax`, ... accept the C23 binary prefix `0b`/`0B` (base 0 or 2) | `<stdlib.h>`, `<wchar.h>`, `<inttypes.h>` | C23 mode maps them to `__tcc_` versions (`lib/c23strto.c`); `-D__TCC_MSVCRT_STRTO` opts out. Without C23 mode the plain names keep the C17 meaning |
+| `sscanf`, `fscanf`, `scanf`, `vsscanf`, `vfscanf`, `vscanf`, `swscanf`, `fwscanf`, `wscanf`, `vswscanf`, `vfwscanf`, `vwscanf` | `<stdio.h>`, `<wchar.h>` | `lib/c23scanf.c`: `%b`, `%hhd`, `%i` with `0b`, the C99 conversions; C23 mode maps the non-`v` functions to it (`-D__TCC_MSVCRT_SCANF` opts out); the `v` functions always come from it. In the wide functions an unqualified `%s`/`%c`/`%[` stores `wchar_t`, as in msvcrt |
+| `swprintf`, `vswprintf` with a size (C99); `wprintf`, `fwprintf`, `vwprintf`, `vfwprintf` with `%b`/`%B` (C23) | `<wchar.h>`, `<stdio.h>` | `lib/c23printf.c`; `-D__TCC_MSVCRT_PRINTF` opts out. An unqualified `%s`/`%c` takes a wide argument as in msvcrt; `swprintf` returns a negative value when truncated |
+| `wcstok` with three arguments (C11) | `<wchar.h>`, `<string.h>` | calls msvcrt's `wcstok_s`; `-D_CRT_NON_CONFORMING_WCSTOK` restores the two-argument one |
+| `mbrtoc8`, `c8rtomb`, `mbrtoc16`, `c16rtomb`, `mbrtoc32`, `c32rtomb`, `char8_t` | `<uchar.h>` | `lib/c23uchar.c`, on top of msvcrt's `mbrtowc`/`wcrtomb`: the locale's multibyte encoding (msvcrt has no UTF-8 locale) and no characters outside the BMP (`EILSEQ`) |
+| const-preserving `strchr`, `strrchr`, `strpbrk`, `strstr`, `memchr`, `wcschr`, `wcsrchr`, `wcspbrk`, `wcsstr`, `wmemchr`, `bsearch` | `<string.h>`, `<wchar.h>`, `<stdlib.h>` | `_Generic` macros in C23 mode: a pointer to const gives a pointer to const |
+| `PRIb*`, `PRIB*`, `SCNb*` | `<inttypes.h>` | |
 
 The `<math.h>` functions implemented in this library set neither `errno` nor
 the floating-point exception flags (msvcrt's own functions set `errno`);
@@ -150,17 +175,29 @@ and `vsnprintf` to wrappers in `libtcc1.a` (`__tcc_printf` etc., source
 The msvcrt-specific `I64`/`I32`/`I` length modifiers (used by `<inttypes.h>`)
 are still accepted. Other output (`%p`, `%a`) is msvcrt's. Compile with
 `-D__TCC_MSVCRT_PRINTF` to call msvcrt's functions directly. The wide
-(`wprintf`) family and `scanf` are not wrapped. Tested by
-`tests/c23/c23_printf_b.c`.
+family is wrapped the same way (see the table above) and `scanf` has its own
+implementation. Tested by `tests/c23/c23_printf_b.c`.
 
-The `__STDC_VERSION_*_H__` macros of the other library headers are still
-not defined, since those headers remain incomplete. `<math.h>` defines
-`__STDC_VERSION_MATH_H__` (`202311L`): every C23 `<math.h>` function and
-macro is available (the decimal floating-point ones are not required, as
-`__STDC_IEC_60559_DFP__` is not defined).
+`<math.h>` defines `__STDC_VERSION_MATH_H__` (`202311L`): every C23
+`<math.h>` function and macro is available (the decimal floating-point ones
+are not required, as `__STDC_IEC_60559_DFP__` is not defined).
 
 ## Library: gaps
 
-None remain: `aligned_alloc`, `free_sized` and `free_aligned_sized`, the
-last ones listed here, are now provided (with the limits described in
-[`aligned_alloc` and `free`](#aligned_alloc-and-free)).
+None known for the audited functions (with the limits stated in the table and
+in [`aligned_alloc` and `free`](#aligned_alloc-and-free)). Not provided:
+`<complex.h>` and `<threads.h>` (optional), `fopen_s` and the other Annex K
+functions (optional), `TIME_ACTIVE`/`TIME_THREAD_ACTIVE`.
+
+## How the C99/C11/C23 library additions were checked
+
+- The x86_64-win32 and i386-win32 compilers compile and link the probe
+  programs and `tests/c23/*.c` (`tests/tccwin-tests.sh`).
+- No Windows system was available for the programs themselves. The sources
+  of `c99fenv.c`, `c23strto.c`, `c23scanf.c`, `c23printf.c` (narrow and wide),
+  `c23uchar.c` and the C99 part of `c23rt.c` are portable to the build host
+  (they call msvcrt only through a few imports), and `tests/c99rt-host.sh`
+  runs their unit tests natively. The Windows-specific calls (`_errno`,
+  `mbrtowc`, `QueryPerformanceCounter`, `Sleep`, msvcrt's `_snprintf`) were
+  therefore **not run**: run `RUN=1 TCC=win32/tcc.exe tests/tccwin-tests.sh`
+  on Windows to execute `tests/c23/c23_lib_c99.c` there.
