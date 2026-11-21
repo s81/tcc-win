@@ -147,63 +147,6 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label);
 static CType *type_decl(CType *type, AttributeDef *ad, int *v, int td);
 static void parse_expr_type(CType *type);
 static void init_putv(init_params *p, CType *type, unsigned long c);
-/* element size in bytes of a string literal token */
-static int str_tok_elsize(int t)
-{
-    switch (t) {
-    case TOK_U16STR: return 2;
-    case TOK_U32STR: return 4;
-    case TOK_LSTR: return sizeof(nwchar_t);
-    default: return 1;
-    }
-}
-
-/* can a string literal token initialize an array with element type t1 ? */
-static int str_elem_ok(int t, CType *t1)
-{
-    int bt = t1->t & VT_BTYPE;
-    switch (t) {
-    case TOK_U16STR: return bt == VT_SHORT;
-    case TOK_U32STR: return bt == VT_INT;
-    case TOK_LSTR:
-#ifdef TCC_TARGET_PE
-        return bt == VT_SHORT && (t1->t & VT_UNSIGNED);
-#else
-        return bt == VT_INT;
-#endif
-    default: return bt == VT_BYTE;
-    }
-}
-
-/* append the narrow (UTF-8) string src to dst as elements of size es (2 or 4),
-   including the terminator; return the number of elements added */
-static int str_widen(CString *dst, const char *src, int size, int es)
-{
-    const unsigned char *p = (const unsigned char *)src, *e = p + size;
-    int n = 0;
-    while (p < e) {
-        unsigned c = *p++;
-        int cont = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
-        if (c >= 0xC0 && p + cont <= e) {
-            c &= 0x3f >> cont;
-            while (cont--)
-                c = (c << 6) | (*p++ & 0x3f);
-        }
-        if (es == 2 && c >= 0x10000) {
-            unsigned short u[2];
-            c -= 0x10000;
-            u[0] = (c >> 10) + 0xD800, u[1] = (c & 0x3FF) + 0xDC00;
-            cstr_cat(dst, (char *)u, 4), n += 2;
-        } else if (es == 2) {
-            unsigned short u = c;
-            cstr_cat(dst, (char *)&u, 2), n++;
-        } else {
-            cstr_cat(dst, (char *)&c, 4), n++;
-        }
-    }
-    return n;
-}
-
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags);
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r, int has_init, int v, int scope);
 static int decl(int l);
@@ -10530,6 +10473,70 @@ static void write_ldouble(unsigned char *d, void *s)
 }
 
 /* store a value or an expression directly in global data or in local array */
+/* C23 constexpr: the initializer value (in vtop, a constant) must be exactly
+   representable in the type of the object */
+static int cexpr_chk; /* set while initializing a constexpr aggregate */
+
+static int cexpr_val_fits(CType *dt)
+{
+    int dbt = dt->t & VT_BTYPE, sbt = vtop->type.t & VT_BTYPE, bits, uns, al;
+    int sfl = is_float(sbt), neg = 0;
+    unsigned long long uv = vtop->c.i;
+    long double d = 0;
+
+    if (!(is_integer_btype(dbt) || dbt == VT_BOOL || is_float(dbt))
+        || !(sfl || is_integer_btype(sbt) || sbt == VT_BOOL))
+        return 1;
+    if (sfl)
+        d = sbt == VT_FLOAT ? vtop->c.f : sbt == VT_DOUBLE ? vtop->c.d
+            : vtop->c.ld;
+    else if (sbt == VT_BOOL)
+        uv = !!uv;
+    else
+        neg = !(vtop->type.t & VT_UNSIGNED) && (long long)uv < 0;
+
+    if (is_float(dbt)) {
+        if (!sfl)
+            d = neg ? (long double)(long long)uv : (long double)uv;
+        if (d != d || d - d != 0)
+            return 1; /* NaN and infinity are exact */
+        if (dbt == VT_FLOAT)
+            return (long double)(float)d == d;
+        if (dbt == VT_DOUBLE)
+            return (long double)(double)d == d;
+        return 1;
+    }
+    uns = dbt == VT_BOOL || (dt->t & VT_UNSIGNED);
+    bits = dbt == VT_BOOL ? 1 : (dt->t & VT_BITFIELD) ? BIT_SIZE(dt->t)
+           : type_size(dt, &al) * 8;
+    if (sfl) {
+        if (d != d || d - d != 0 || d >= 18446744073709551616.0L
+            || d < -9223372036854775808.0L)
+            return 0;
+        if (d < 0) {
+            neg = 1, uv = (unsigned long long)(long long)d;
+            if ((long double)(long long)uv != d)
+                return 0;
+        } else {
+            uv = (unsigned long long)d;
+            if ((long double)uv != d)
+                return 0;
+        }
+    }
+    if (neg)
+        return !uns && (bits >= 64 || (long long)uv >= -(1LL << (bits - 1)));
+    if (bits >= 64)
+        return uns || (long long)uv >= 0;
+    return uv <= (uns ? (1ULL << bits) - 1 : (1ULL << (bits - 1)) - 1);
+}
+
+static void cexpr_check(CType *dt)
+{
+    if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST
+        && !cexpr_val_fits(dt))
+        tcc_error("constexpr initializer is not representable in the type of the object");
+}
+
 static void init_putv(init_params *p, CType *type, unsigned long c)
 {
     int bt;
@@ -10546,6 +10553,8 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     if (type->t & VT_BITFIELD)
         size = (BIT_POS(type->t) + BIT_SIZE(type->t) + 7) / 8;
     init_assert(p, c + size);
+    if (cexpr_chk && !(type->t & VT_ARRAY))
+        cexpr_check(type);
 
     if (sec) {
         /* XXX: not portable */
@@ -10686,6 +10695,63 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
    allocation. 'flags & DIF_FIRST' is true if array '{' must be read (multi
    dimension implicit array init handling). 'flags & DIF_SIZE_ONLY' is true if
    size only evaluation is wanted (only for arrays). */
+/* element size in bytes of a string literal token */
+static int str_tok_elsize(int t)
+{
+    switch (t) {
+    case TOK_U16STR: return 2;
+    case TOK_U32STR: return 4;
+    case TOK_LSTR: return sizeof(nwchar_t);
+    default: return 1;
+    }
+}
+
+/* can a string literal token initialize an array with element type t1 ? */
+static int str_elem_ok(int t, CType *t1)
+{
+    int bt = t1->t & VT_BTYPE;
+    switch (t) {
+    case TOK_U16STR: return bt == VT_SHORT;
+    case TOK_U32STR: return bt == VT_INT;
+    case TOK_LSTR:
+#ifdef TCC_TARGET_PE
+        return bt == VT_SHORT && (t1->t & VT_UNSIGNED);
+#else
+        return bt == VT_INT;
+#endif
+    default: return bt == VT_BYTE;
+    }
+}
+
+/* append the narrow (UTF-8) string src to dst as elements of size es (2 or 4),
+   including the terminator; return the number of elements added */
+static int str_widen(CString *dst, const char *src, int size, int es)
+{
+    const unsigned char *p = (const unsigned char *)src, *e = p + size;
+    int n = 0;
+    while (p < e) {
+        unsigned c = *p++;
+        int cont = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+        if (c >= 0xC0 && p + cont <= e) {
+            c &= 0x3f >> cont;
+            while (cont--)
+                c = (c << 6) | (*p++ & 0x3f);
+        }
+        if (es == 2 && c >= 0x10000) {
+            unsigned short u[2];
+            c -= 0x10000;
+            u[0] = (c >> 10) + 0xD800, u[1] = (c & 0x3FF) + 0xDC00;
+            cstr_cat(dst, (char *)u, 4), n += 2;
+        } else if (es == 2) {
+            unsigned short u = c;
+            cstr_cat(dst, (char *)&u, 2), n++;
+        } else {
+            cstr_cat(dst, (char *)&c, 4), n++;
+        }
+    }
+    return n;
+}
+
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags)
 {
     int len, n, no_oblock, i;
@@ -11204,8 +11270,18 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     if (type->t & VT_VLA) {
         int a;
 
-        if (has_init)
-            tcc_error("variable length array cannot be initialized");
+        int vla_zero = 0;
+
+        if (has_init) {
+            /* C23: a variable length array may be initialized with {} */
+            if (tok != '{')
+                tcc_error("variable length array cannot be initialized");
+            next();
+            if (tok != '}')
+                tcc_error("variable length array can only be initialized with {}");
+            next();
+            vla_zero = 1;
+        }
 
         if (NODATA_WANTED)
             goto no_alloc;
@@ -11230,6 +11306,16 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
         gen_vla_sp_save(addr);
         cur_scope->vla.loc = addr;
         cur_scope->vla.num++;
+        if (vla_zero) {
+            vpush_helper_func(TOK_memset);
+            vset(&char_pointer_type, VT_LOCAL | VT_LVAL, addr);
+            vpushi(0);
+            vpush_type_size(type, &a);
+#if defined TCC_TARGET_ARM && defined TCC_ARM_EABI
+            vswap();
+#endif
+            gfunc_call(3);
+        }
     } else if (has_init) {
         p.sec = sec;
         decl_initializer(&p, type, addr, DIF_FIRST);
@@ -11615,7 +11701,15 @@ static int decl(int l)
                     CType tc;
                     int sz, al;
                     next();
-                    ll = expr_const64();
+                    expr_const1();
+                    if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != VT_CONST)
+                        expect("constant expression");
+                    cexpr_check(&type);
+                    tc.t = type.t & ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE);
+                    tc.ref = NULL;
+                    gen_cast(&tc);
+                    ll = vtop->c.i;
+                    vpop();
                     sz = type_size(&type, &al);
                     if ((type.t & VT_BTYPE) == VT_BOOL)
                         ll = !!ll;
@@ -11639,6 +11733,8 @@ static int decl(int l)
                     CType tc = type;
                     next();
                     expr_const1();
+                    if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST)
+                        cexpr_check(&type);
                     tc.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE);
                     gen_cast(&tc);
                     if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) != VT_CONST)
@@ -11835,6 +11931,7 @@ static int decl(int l)
                         else if (l == VT_CONST)
                             /* uninitialized global variables may be overridden */
                             type.t |= VT_EXTERN;
+                        cexpr_chk = cexpr_agg;
                         if ((ad.a.owner || ad.a.borrow) && r == (VT_LOCAL|VT_LVAL)) {
                             struct own_var *mv = has_init ? own_peek(0) : NULL;
                             int st = !has_init ? OWN_MOVED
@@ -11890,6 +11987,7 @@ static int decl(int l)
                             own_si = si0;
                         } else
                         decl_initializer_alloc(&type, &ad, r, has_init, v, l);
+                        cexpr_chk = 0;
                         if (cexpr_agg && (sym = sym_find(v)))
                             sym->a.cexpr_agg = 1; /* its initializer is written now */
                         if (auto_str) {
