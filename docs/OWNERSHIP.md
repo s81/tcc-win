@@ -69,6 +69,16 @@ Each owner is in one of the states *owned*, *moved* (also: uninitialized),
 
 `*p = x` writes through `p`; it does not assign `p` (no overwrite check).
 
+**Reallocation.** In the Windows headers `realloc`, `_recalloc` and the
+`_aligned_*realloc`/`_aligned_*recalloc` functions take an owner, so
+`p = realloc(p, n);` is accepted: the call moves `p`, and the assignment gives
+it the result. The overwrite check is made after the right-hand side, so
+`p = f(p)` is fine for any function whose parameter is `[[owner]]`. The
+form with a temporary (`q = realloc(p, n); if (!q) { free(p); ... }`) is
+reported as use after move on the failure path: the checker does not know
+that a failed `realloc` leaves `p` valid. Use `p = realloc(p, n)` and test `p`
+afterwards (the old block is lost on failure, as in any C code that does so).
+
 **Null.** An owner that is *null* need not be released. An owner is null
 when it is initialized or assigned with a null constant (`nullptr`, `0`,
 `NULL`, `(void *)0`), and where a **null test** shows it is null:

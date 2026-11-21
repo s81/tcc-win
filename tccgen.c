@@ -5245,6 +5245,22 @@ static void own_use_struct(const struct own_path *p, int addrof)
     }
 }
 
+/* 'o = expr' has been parsed: the old value of owner 'o' is lost unless the
+   right hand side moved it */
+static void own_check_overwrite(struct own_var *o)
+{
+    if (o->kind == OWN_OWNER && ((o->st == OWN_OWNED
+        /* a field of the caller's object that was not touched yet may
+           be uninitialized (init functions) */
+        && !(o->ptr && o->own_line < 0)) || (o->st == OWN_MAYBE
+        && !(o->lazy && o->own_line < 0)))) {
+        char at[48];
+        own_err(o, "assignment overwrites owner '%s' which %s owns a resource (leak)%s",
+            own_name(o), o->st == OWN_OWNED ? "still" : "possibly still",
+            own_at(at, "acquired", o->own_line));
+    }
+}
+
 static void own_use_o(struct own_var *o, int addrof)
 {
     const char *name = own_name(o);
@@ -5257,16 +5273,8 @@ static void own_use_o(struct own_var *o, int addrof)
             else
                 own_read(o); /* may not run: the old value may live on */
         }
-        if (o->kind == OWN_OWNER && ((o->st == OWN_OWNED
-            /* a field of the caller's object that was not touched yet may
-               be uninitialized (init functions) */
-            && !(o->ptr && o->own_line < 0)) || (o->st == OWN_MAYBE
-            && !(o->lazy && o->own_line < 0)))) {
-            char at[48];
-            own_err(o, "assignment overwrites owner '%s' which %s owns a resource (leak)%s",
-                name, o->st == OWN_OWNED ? "still" : "possibly still",
-                own_at(at, "acquired", o->own_line));
-        }
+        /* the leak check itself is made by own_check_overwrite() once the
+           right hand side is parsed: it may move the owner (p = realloc(p, n)) */
         own_pending = o;
         return;
     }
@@ -9250,6 +9258,8 @@ static void expr_eq(void)
             own_lending = dst && dst->kind != OWN_OWNER ? mv : NULL;
             expr_eq();
             own_lending = NULL;
+            if (dst)
+                own_check_overwrite(dst);
             own_assign(dst, mv);
             own_sassign(&sdst, has_ssrc ? &ssrc : NULL);
         } else {

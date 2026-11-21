@@ -63,3 +63,4 @@ err_chain_release_leak.c owner 'n->data' still owns a resource at release of 'n'
 err_chain_left_moved.c owner field 'n->data' left moved when 'n' is moved: assign it (e.g. NULL) or move it back (moved at line 5)
 err_chain_nested.c use of owner 'l->head->next->data' after move (moved at line 6)
 err_chain_borrow.c cannot move owner 'n' while it is borrowed by 'v' (borrowed at line 6)
+err_realloc_borrowed.c cannot move owner 'p' while it is borrowed by 'v' (borrowed at line 8)
