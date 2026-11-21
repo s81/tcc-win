@@ -15,8 +15,8 @@ fail=0
 
 check_ok() { # dir file [flags]
     if out=$(cd "$1" && $TCC $3 "$2" -o "$tmp/t.exe" 2>&1) && [ -z "$out" ]; then
-        if [ -n "$RUN" ] && ! "$tmp/t.exe" >"$tmp/out.txt" 2>&1; then
-            echo "FAIL (run) $2"; cat "$tmp/out.txt"; fail=1
+        if [ -n "$RUN" ] && { "$tmp/t.exe" >"$tmp/out.txt" 2>&1; rc=$?; [ $rc -ne 0 ]; }; then
+            echo "FAIL (run) $2 (exit code $rc)"; cat "$tmp/out.txt"; fail=1
         else
             echo "ok   $2"
         fi
