@@ -48,6 +48,7 @@ check_ok "$top/tests/c23" c23_math3.c -Wall
 check_ok "$top/tests/c23" c23_aligned.c -Wall
 check_ok "$top/tests/c23" c23_attrs_ok.c -Wall
 check_ok "$top/tests/c23" c23_final.c -Wall
+check_ok "$top/tests/c23" c23_nan.c -Wall
 check_ok "$top/tests/c23" knr_c17.c "-std=c17 -Wall"
 # [[nodiscard]] / [[deprecated]] diagnostics (warnings, silenced by -w)
 out=$(cd "$top/tests/c23" && $TCC -c warn_attrs.c -o "$tmp/t.o" 2>&1)

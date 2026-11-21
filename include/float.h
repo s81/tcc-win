@@ -98,7 +98,7 @@
 /* C23 7.7 */
 #define __STDC_VERSION_FLOAT_H__ 202311L
 #define INFINITY (1.0F/0.0F)
-#define NAN (0.0F/0.0F)
+#define NAN __builtin_nanf("")
 #define FLT_IS_IEC_60559 1
 #define DBL_IS_IEC_60559 1
 #define LDBL_IS_IEC_60559 1
