@@ -6,6 +6,10 @@
 #ifndef _INC_WCHAR
 #define _INC_WCHAR
 
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_WCHAR_H__ 202311L
+#endif
+
 #include <_mingw.h>
 
 #pragma pack(push,_CRT_PACKING)
@@ -252,6 +256,9 @@ extern FILE (*_imp___iob)[];	/* A pointer to an array of FILE */
   wint_t __cdecl towlower(wint_t _C);
   _CRTIMP wint_t __cdecl _towlower_l(wint_t _C,_locale_t _Locale);
   int __cdecl iswctype(wint_t _C,wctype_t _Type);
+#if (defined (__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || !defined (NO_OLDNAMES)
+  int __cdecl iswblank(wint_t);
+#endif
   _CRTIMP int __cdecl _iswctype_l(wint_t _C,wctype_t _Type,_locale_t _Locale);
   _CRTIMP int __cdecl __iswcsymf(wint_t _C);
   _CRTIMP int __cdecl _iswcsymf_l(wint_t _C,_locale_t _Locale);

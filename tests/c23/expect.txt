@@ -18,3 +18,4 @@ err_constexpr_range_frac.c constexpr initializer is not representable in the typ
 err_constexpr_range_member.c constexpr initializer is not representable in the type of the object
 err_constexpr_range_ll.c constexpr initializer is not representable in the type of the object
 err_vla_init.c variable length array can only be initialized with {}
+err_ident_emoji.c character U+1F600 is not allowed in an identifier
