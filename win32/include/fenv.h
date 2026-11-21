@@ -11,6 +11,24 @@
 
 #include <_mingw.h>
 
+#if defined __aarch64__
+/* ARM64: the flags are the FPSR bits (IOC, DZC, OFC, UFC, IXC) and the
+   rounding mode is FPCR.RMode (bits 23:22) */
+#define FE_INVALID	0x01
+#define FE_DIVBYZERO	0x02
+#define FE_OVERFLOW	0x04
+#define FE_UNDERFLOW	0x08
+#define FE_INEXACT	0x10
+#define FE_ALL_EXCEPT (FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW \
+		       | FE_UNDERFLOW | FE_INEXACT)
+
+#define FE_TONEAREST	0x000000
+#define FE_UPWARD	0x400000
+#define FE_DOWNWARD	0x800000
+#define FE_TOWARDZERO	0xc00000
+
+#else /* x86 */
+
 /* FPU status word exception flags */
 #define FE_INVALID	0x01
 #define FE_DENORMAL	0x02
@@ -35,12 +53,38 @@
    to get MXCSR rounding flags,  */
 #define __MXCSR_ROUND_FLAG_SHIFT 3
 
+#endif /* x86 */
+
 #ifndef RC_INVOKED
 /*
   For now, support only for the basic abstraction of flags that are
   either set or clear. fexcept_t could be  structure that holds more
   info about the fp environment.
 */
+#if defined __aarch64__
+typedef unsigned int fexcept_t;
+
+/* the environment: FPCR (rounding, trap enables) and FPSR (flags) */
+typedef struct
+{
+  unsigned int __fpcr;
+  unsigned int __fpsr;
+} fenv_t;
+
+/* C23: the control modes: FPCR */
+typedef struct
+{
+  unsigned int __fpcr;
+} femode_t;
+
+/* The default control modes (C23 7.6.1) */
+#define FE_DFL_MODE ((const femode_t *) 0)
+
+/* The FE_DFL_ENV macro is required by standard: round to nearest, no
+   traps, no flags */
+#define FE_DFL_ENV ((const fenv_t *) 0)
+
+#else /* x86 */
 typedef unsigned short fexcept_t;
 
 /* This 32-byte struct represents the entire floating point
@@ -76,6 +120,9 @@ typedef struct
 /* The default control modes (C23 7.6.1) */
 #define FE_DFL_MODE ((const femode_t *) 0)
 
+#endif /* x86 */
+
+#if !defined __aarch64__
 /*The C99 standard (7.6.9) allows us to define implementation-specific macros for
   different fp environments */
   
@@ -88,6 +135,7 @@ typedef struct
 /* The FE_DFL_ENV macro is required by standard.
   fesetenv will use the environment set at app startup.*/
 #define FE_DFL_ENV ((const fenv_t *) 0)
+#endif /* x86 */
 
 #ifdef __cplusplus
 extern "C" {
