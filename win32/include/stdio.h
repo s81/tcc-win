@@ -466,4 +466,59 @@ extern "C" {
 #define vsnprintf __tcc_vsnprintf
 #endif
 
+/* C23: msvcrt's scanf lacks %b, treats %hhd as %hd and has no v*scanf; use
+   the scanf of libtcc1.a (lib/c23scanf.c).  -D__TCC_MSVCRT_SCANF opts out. */
+#if __STDC_VERSION__ >= 202311L && !defined(__TCC_MSVCRT_SCANF) && !defined(__TCC_SCANF_MAP)
+#define __TCC_SCANF_MAP
+#ifdef __cplusplus
+extern "C" {
+#endif
+  int __tcc_scanf(const char *_Format,...);
+  int __tcc_fscanf(FILE *_File,const char *_Format,...);
+  int __tcc_sscanf(const char *_Src,const char *_Format,...);
+  int __tcc_wscanf(const wchar_t *_Format,...);
+  int __tcc_fwscanf(FILE *_File,const wchar_t *_Format,...);
+  int __tcc_swscanf(const wchar_t *_Src,const wchar_t *_Format,...);
+#ifdef __cplusplus
+}
+#endif
+#define scanf __tcc_scanf
+#define fscanf __tcc_fscanf
+#define sscanf __tcc_sscanf
+#define wscanf __tcc_wscanf
+#define fwscanf __tcc_fwscanf
+#define swscanf __tcc_swscanf
+#endif
+
+/* C99 swprintf/vswprintf take the buffer size (msvcrt's do not); in C23 the
+   wprintf family also gets %b/%B.  tcc's versions are in libtcc1.a
+   (lib/c23printf.c).  -D__TCC_MSVCRT_PRINTF opts out of both. */
+#if __STDC_VERSION__ >= 199901L && !defined(__TCC_MSVCRT_PRINTF) && !defined(_CRT_NON_CONFORMING_SWPRINTFS) && !defined(__TCC_WPRINTF_MAP)
+#define __TCC_WPRINTF_MAP
+#ifdef __cplusplus
+extern "C" {
+#endif
+  int __tcc_swprintf(wchar_t *_Dest,size_t _Count,const wchar_t *_Format,...);
+  int __tcc_vswprintf(wchar_t *_Dest,size_t _Count,const wchar_t *_Format,va_list _ArgList);
+#if __STDC_VERSION__ >= 202311L
+  int __tcc_wprintf(const wchar_t *_Format,...);
+  int __tcc_fwprintf(FILE *_File,const wchar_t *_Format,...);
+  int __tcc_vwprintf(const wchar_t *_Format,va_list _ArgList);
+  int __tcc_vfwprintf(FILE *_File,const wchar_t *_Format,va_list _ArgList);
+#endif
+#ifdef __cplusplus
+}
+#endif
+#undef swprintf
+#undef vswprintf
+#define swprintf __tcc_swprintf
+#define vswprintf __tcc_vswprintf
+#if __STDC_VERSION__ >= 202311L
+#define wprintf __tcc_wprintf
+#define fwprintf __tcc_fwprintf
+#define vwprintf __tcc_vwprintf
+#define vfwprintf __tcc_vfwprintf
+#endif
+#endif
+
 #endif

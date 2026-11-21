@@ -30,6 +30,8 @@ check_ok "$top/tests/c23" c23_more.c -w
 check_ok "$top/tests/c23" c23_bitint.c
 check_ok "$top/tests/c23" c23_utf_literals.c -Wall
 check_ok "$top/tests/c23" c23_vla_init.c -Wall
+check_ok "$top/tests/c23" c23_lib_c99.c -Wall
+check_ok "$top/tests/c23" c23_version_macros.c -Wall
 check_ok "$top/tests/c23" c23_utf_macros.c -Wall
 check_ok "$top/tests/c23" c23_va_opt_paste.c -Wall
 check_ok "$top/tests/c23" c23_has_attr_scoped.c -Wall

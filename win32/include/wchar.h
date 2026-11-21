@@ -750,7 +750,16 @@ extern FILE (*_imp___iob)[];	/* A pointer to an array of FILE */
   _CONST_RETURN wchar_t *__cdecl wcsrchr(const wchar_t *_Str,wchar_t _Ch);
   size_t __cdecl wcsspn(const wchar_t *_Str,const wchar_t *_Control);
   _CONST_RETURN wchar_t *__cdecl wcsstr(const wchar_t *_Str,const wchar_t *_SubStr);
+#if __STDC_VERSION__ >= 201112L && !defined(_CRT_NON_CONFORMING_WCSTOK)
+  /* C11 7.29.4.5.7: wcstok has a third argument (msvcrt's has two; its
+     wcstok_s is the C11 function).  __tcc_wcstok2 is msvcrt's 2-argument one
+     for <tchar.h>. */
+  _CRTIMP wchar_t *__cdecl wcstok_s(wchar_t *_Str,const wchar_t *_Delim,wchar_t **_Context);
+  wchar_t *__cdecl __tcc_wcstok2(wchar_t *_Str,const wchar_t *_Delim) __asm__("wcstok");
+  __CRT_INLINE wchar_t *__cdecl wcstok(wchar_t *_Str,const wchar_t *_Delim,wchar_t **_Ptr) { return wcstok_s(_Str,_Delim,_Ptr); }
+#else
   wchar_t *__cdecl wcstok(wchar_t *_Str,const wchar_t *_Delim);
+#endif
   _CRTIMP wchar_t *__cdecl _wcserror(int _ErrNum);
   _CRTIMP wchar_t *__cdecl __wcserror(const wchar_t *_Str);
   _CRTIMP int __cdecl _wcsicmp(const wchar_t *_Str1,const wchar_t *_Str2);
@@ -847,6 +856,19 @@ __CRT_INLINE wchar_t *__cdecl _wctime(const time_t *_Time) { return _wctime64(_T
   long long __cdecl wcstoll(const wchar_t *nptr,wchar_t **endptr, int base);
   unsigned long long __cdecl wcstoull(const wchar_t *nptr,wchar_t **endptr, int base);
 #endif /* __NO_ISOCEXT */
+#if __STDC_VERSION__ >= 202311L
+  /* C23 7.31.4.1.2: binary prefix; see <stdlib.h> */
+  long __cdecl __tcc_wcstol(const wchar_t *,wchar_t **,int);
+  unsigned long __cdecl __tcc_wcstoul(const wchar_t *,wchar_t **,int);
+  long long __cdecl __tcc_wcstoll(const wchar_t *,wchar_t **,int);
+  unsigned long long __cdecl __tcc_wcstoull(const wchar_t *,wchar_t **,int);
+#ifndef __TCC_MSVCRT_STRTO
+#define wcstol __tcc_wcstol
+#define wcstoul __tcc_wcstoul
+#define wcstoll __tcc_wcstoll
+#define wcstoull __tcc_wcstoull
+#endif
+#endif
 
   void *__cdecl memmove(void *_Dst,const void *_Src,size_t _MaxCount);
   void *__cdecl memcpy(void *_Dst,const void *_Src,size_t _MaxCount);
@@ -867,7 +889,89 @@ __CRT_INLINE wchar_t *__cdecl _wctime(const time_t *_Time) { return _wctime64(_T
 }
 #endif
 
+#if __STDC_VERSION__ >= 202311L && !defined(__cplusplus)
+/* C23 7.31.4: const-preserving search functions (see <string.h>) */
+#ifndef __TCC_QUAL_PTR
+#define __TCC_QUAL_PTR(p) (1 ? (p) : (void *)1)
+#endif
+#define wmemchr(s, c, n) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const wchar_t *)(wmemchr)((s), (c), (n)), \
+    const volatile void *: (const volatile wchar_t *)(wmemchr)((s), (c), (n)), \
+    default: (wmemchr)((s), (c), (n)))
+#define wcschr(s, c) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const wchar_t *)(wcschr)((s), (c)), \
+    const volatile void *: (const volatile wchar_t *)(wcschr)((s), (c)), \
+    default: (wcschr)((s), (c)))
+#define wcsrchr(s, c) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const wchar_t *)(wcsrchr)((s), (c)), \
+    const volatile void *: (const volatile wchar_t *)(wcsrchr)((s), (c)), \
+    default: (wcsrchr)((s), (c)))
+#define wcspbrk(s, t) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const wchar_t *)(wcspbrk)((s), (t)), \
+    const volatile void *: (const volatile wchar_t *)(wcspbrk)((s), (t)), \
+    default: (wcspbrk)((s), (t)))
+#define wcsstr(s, t) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const wchar_t *)(wcsstr)((s), (t)), \
+    const volatile void *: (const volatile wchar_t *)(wcsstr)((s), (t)), \
+    default: (wcsstr)((s), (t)))
+#endif
+
 #pragma pack(pop)
 
 #include <sec_api/wchar_s.h>
+
+/* C23: msvcrt's scanf lacks %b, treats %hhd as %hd and has no v*scanf; use
+   the scanf of libtcc1.a (lib/c23scanf.c).  -D__TCC_MSVCRT_SCANF opts out. */
+#if __STDC_VERSION__ >= 202311L && !defined(__TCC_MSVCRT_SCANF) && !defined(__TCC_SCANF_MAP)
+#define __TCC_SCANF_MAP
+#ifdef __cplusplus
+extern "C" {
+#endif
+  int __tcc_scanf(const char *_Format,...);
+  int __tcc_fscanf(FILE *_File,const char *_Format,...);
+  int __tcc_sscanf(const char *_Src,const char *_Format,...);
+  int __tcc_wscanf(const wchar_t *_Format,...);
+  int __tcc_fwscanf(FILE *_File,const wchar_t *_Format,...);
+  int __tcc_swscanf(const wchar_t *_Src,const wchar_t *_Format,...);
+#ifdef __cplusplus
+}
+#endif
+#define scanf __tcc_scanf
+#define fscanf __tcc_fscanf
+#define sscanf __tcc_sscanf
+#define wscanf __tcc_wscanf
+#define fwscanf __tcc_fwscanf
+#define swscanf __tcc_swscanf
+#endif
+/* C99 swprintf/vswprintf take the buffer size (msvcrt's do not); in C23 the
+   wprintf family also gets %b/%B.  tcc's versions are in libtcc1.a
+   (lib/c23printf.c).  -D__TCC_MSVCRT_PRINTF opts out of both. */
+#if __STDC_VERSION__ >= 199901L && !defined(__TCC_MSVCRT_PRINTF) && !defined(_CRT_NON_CONFORMING_SWPRINTFS) && !defined(__TCC_WPRINTF_MAP)
+#define __TCC_WPRINTF_MAP
+#ifdef __cplusplus
+extern "C" {
+#endif
+  int __tcc_swprintf(wchar_t *_Dest,size_t _Count,const wchar_t *_Format,...);
+  int __tcc_vswprintf(wchar_t *_Dest,size_t _Count,const wchar_t *_Format,va_list _ArgList);
+#if __STDC_VERSION__ >= 202311L
+  int __tcc_wprintf(const wchar_t *_Format,...);
+  int __tcc_fwprintf(FILE *_File,const wchar_t *_Format,...);
+  int __tcc_vwprintf(const wchar_t *_Format,va_list _ArgList);
+  int __tcc_vfwprintf(FILE *_File,const wchar_t *_Format,va_list _ArgList);
+#endif
+#ifdef __cplusplus
+}
+#endif
+#undef swprintf
+#undef vswprintf
+#define swprintf __tcc_swprintf
+#define vswprintf __tcc_vswprintf
+#if __STDC_VERSION__ >= 202311L
+#define wprintf __tcc_wprintf
+#define fwprintf __tcc_fwprintf
+#define vwprintf __tcc_vwprintf
+#define vfwprintf __tcc_vfwprintf
+#endif
+#endif
+
 #endif

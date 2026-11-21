@@ -27,10 +27,30 @@
  */
 #define __STDC_UTF_32__ 1
 
+#include <stddef.h>
+#include <wchar.h>  /* mbstate_t */
+
 typedef unsigned short char16_t;
 typedef unsigned int char32_t;
 #if __STDC_VERSION__ >= 202311L
 typedef unsigned char char8_t;
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* in libtcc1.a (lib/c23uchar.c); the multibyte encoding is the C runtime's
+   current locale and characters outside the BMP are not supported there */
+size_t __cdecl mbrtoc16(char16_t *__restrict__ _Pc16,const char *__restrict__ _S,size_t _N,mbstate_t *__restrict__ _Ps);
+size_t __cdecl c16rtomb(char *__restrict__ _S,char16_t _C16,mbstate_t *__restrict__ _Ps);
+size_t __cdecl mbrtoc32(char32_t *__restrict__ _Pc32,const char *__restrict__ _S,size_t _N,mbstate_t *__restrict__ _Ps);
+size_t __cdecl c32rtomb(char *__restrict__ _S,char32_t _C32,mbstate_t *__restrict__ _Ps);
+#if __STDC_VERSION__ >= 202311L
+size_t __cdecl mbrtoc8(char8_t *__restrict__ _Pc8,const char *__restrict__ _S,size_t _N,mbstate_t *__restrict__ _Ps);
+size_t __cdecl c8rtomb(char *__restrict__ _S,char8_t _C8,mbstate_t *__restrict__ _Ps);
+#endif
+#ifdef __cplusplus
+}
 #endif
 #endif /* __STDC_VERSION__ >= 201112L */
 #endif /* _INC_UCHAR */

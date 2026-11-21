@@ -289,6 +289,8 @@ struct timezone {
 int __cdecl timespec_get(struct timespec *_Ts,int _Base);
 #endif
 #if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_TIME_H__ 202311L
+#define TIME_MONOTONIC 2
 int __cdecl timespec_getres(struct timespec *_Ts,int _Base);
 struct tm *__cdecl gmtime_r(const time_t *_Time,struct tm *_Tm);
 time_t __cdecl timegm(struct tm *_Tm);

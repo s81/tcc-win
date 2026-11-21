@@ -5,6 +5,9 @@
  */
 #ifndef _INC_SETJMP
 #define _INC_SETJMP
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_SETJMP_H__ 202311L
+#endif
 
 #include <_mingw.h>
 

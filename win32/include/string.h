@@ -117,7 +117,16 @@ extern "C" {
   _CONST_RETURN wchar_t *__cdecl wcsrchr(const wchar_t *_Str,wchar_t _Ch);
   size_t __cdecl wcsspn(const wchar_t *_Str,const wchar_t *_Control);
   _CONST_RETURN wchar_t *__cdecl wcsstr(const wchar_t *_Str,const wchar_t *_SubStr);
+#if __STDC_VERSION__ >= 201112L && !defined(_CRT_NON_CONFORMING_WCSTOK)
+  /* C11 7.29.4.5.7: wcstok has a third argument (msvcrt's has two; its
+     wcstok_s is the C11 function).  __tcc_wcstok2 is msvcrt's 2-argument one
+     for <tchar.h>. */
+  _CRTIMP wchar_t *__cdecl wcstok_s(wchar_t *_Str,const wchar_t *_Delim,wchar_t **_Context);
+  wchar_t *__cdecl __tcc_wcstok2(wchar_t *_Str,const wchar_t *_Delim) __asm__("wcstok");
+  __CRT_INLINE wchar_t *__cdecl wcstok(wchar_t *_Str,const wchar_t *_Delim,wchar_t **_Ptr) { return wcstok_s(_Str,_Delim,_Ptr); }
+#else
   wchar_t *__cdecl wcstok(wchar_t *_Str,const wchar_t *_Delim);
+#endif
   _CRTIMP wchar_t *__cdecl _wcserror(int _ErrNum);
   _CRTIMP wchar_t *__cdecl __wcserror(const wchar_t *_Str);
   _CRTIMP int __cdecl _wcsicmp(const wchar_t *_Str1,const wchar_t *_Str2);
@@ -164,6 +173,38 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+#endif
+
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_STRING_H__ 202311L
+#ifndef __cplusplus
+/* C23 7.26.5: the search functions return a pointer to const-qualified type
+   when the argument points to const-qualified type.  (p ? q : (void *)1 has
+   the qualifiers of q and type pointer to void.) */
+#ifndef __TCC_QUAL_PTR
+#define __TCC_QUAL_PTR(p) (1 ? (p) : (void *)1)
+#endif
+#define memchr(s, c, n) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const void *)(memchr)((s), (c), (n)), \
+    const volatile void *: (const volatile void *)(memchr)((s), (c), (n)), \
+    default: (memchr)((s), (c), (n)))
+#define strchr(s, c) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const char *)(strchr)((s), (c)), \
+    const volatile void *: (const volatile char *)(strchr)((s), (c)), \
+    default: (strchr)((s), (c)))
+#define strrchr(s, c) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const char *)(strrchr)((s), (c)), \
+    const volatile void *: (const volatile char *)(strrchr)((s), (c)), \
+    default: (strrchr)((s), (c)))
+#define strpbrk(s, t) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const char *)(strpbrk)((s), (t)), \
+    const volatile void *: (const volatile char *)(strpbrk)((s), (t)), \
+    default: (strpbrk)((s), (t)))
+#define strstr(s, t) _Generic(__TCC_QUAL_PTR(s), \
+    const void *: (const char *)(strstr)((s), (t)), \
+    const volatile void *: (const volatile char *)(strstr)((s), (t)), \
+    default: (strstr)((s), (t)))
+#endif /* !__cplusplus */
 #endif
 
 #include <sec_api/string_s.h>
