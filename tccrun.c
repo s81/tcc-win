@@ -223,7 +223,11 @@ typedef struct TCCRunTLS {
 } TCCRunTLS;
 
 /* the FLS functions, looked up at run time: the kernel32.def of an older tcc
-   that builds this one does not list them */
+   that builds this one does not list them (and the Windows SDK declares FLS
+   only for _WIN32_WINNT >= 0x0600) */
+#ifndef FLS_OUT_OF_INDEXES
+# define FLS_OUT_OF_INDEXES ((DWORD)0xFFFFFFFF)
+#endif
 static DWORD (WINAPI *p_FlsAlloc)(void (WINAPI *)(void *));
 static BOOL (WINAPI *p_FlsSetValue)(DWORD, void *);
 static BOOL (WINAPI *p_FlsFree)(DWORD);
