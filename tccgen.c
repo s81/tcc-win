@@ -10500,10 +10500,15 @@ static int cexpr_val_fits(CType *dt)
             d = neg ? (long double)(long long)uv : (long double)uv;
         if (d != d || d - d != 0)
             return 1; /* NaN and infinity are exact */
-        if (dbt == VT_FLOAT)
-            return (long double)(float)d == d;
-        if (dbt == VT_DOUBLE)
-            return (long double)(double)d == d;
+        /* go through memory: on x87 (i386) a cast alone does not round */
+        if (dbt == VT_FLOAT) {
+            volatile float f = (float)d;
+            return (long double)f == d;
+        }
+        if (dbt == VT_DOUBLE) {
+            volatile double dd = (double)d;
+            return (long double)dd == d;
+        }
         return 1;
     }
     uns = dbt == VT_BOOL || (dt->t & VT_UNSIGNED);
