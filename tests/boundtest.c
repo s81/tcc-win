@@ -81,7 +81,7 @@ int test6(void)
     int *tab4;
     
     tab4 = malloc(20 * sizeof(int));
-    free(tab4);
+    free((void *)tab4); /* (cast: hide the use after free from the compile-time check) */
     for(i=0;i<21;i++) {
         sum += tab4[i];
     }
@@ -154,7 +154,7 @@ int test12(void)
 {
     void *ptr;
     ptr = malloc(10);
-    free(ptr);
+    free((void *)ptr); /* (cast: hide the double free from the compile-time check) */
     free(ptr);
     return 0;
 }

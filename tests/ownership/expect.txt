@@ -70,7 +70,17 @@ err_discard_arg.c result of 'strdup' is an owner and is passed to a parameter th
 err_lost_index.c result of 'strdup' is an owner and is lost in an expression (leak): keep it in an [[owner]] variable
 err_lost_cond.c result of 'malloc' is an owner and is lost in an expression (leak): keep it in an [[owner]] variable
 err_discard_cast.c result of 'strdup' is an owner and is passed to a parameter that does not take ownership (leak): keep it in an [[owner]] variable
-err_implicit_leak.c owner 'p' still owns a resource at 'return' (leak)
-err_implicit_noretain.c owner 'p' still owns a resource at end of scope (leak)
-err_implicit_overwrite.c assignment overwrites owner 'p' which still owns a resource (leak)
+err_implicit_leak.c pointer 'p' still owns a resource at 'return' (leak)
+err_implicit_noretain.c pointer 'p' still owns a resource at end of scope (leak)
+err_implicit_overwrite.c assignment overwrites pointer 'p' which still owns a resource (leak)
 err_cast_int.c result of 'malloc' is an owner and is lost in an expression (leak)
+err_plain_nested_leak.c pointer 'p' still owns a resource at end of scope (leak)
+err_plain_nested_null.c pointer 'p' still owns a resource at end of scope (leak)
+err_plain_use_after_free.c use of pointer 'p' after it was released (released at line 3)
+err_plain_double_free_param.c use of pointer 'p' after it was released
+err_plain_free_then_arg.c use of pointer 'p' after it was released
+err_plain_field_leak.c pointer 's.p' still owns a resource at end of scope (leak)
+err_plain_field_uaf.c use of pointer 's.p' after it was released
+err_plain_elem_leak.c pointer 'a[0]' still owns a resource at end of scope (leak)
+err_plain_global_overwrite.c assignment overwrites pointer 'g' which still owns a resource (leak)
+err_plain_global_uaf.c use of pointer 'g' after it was released
