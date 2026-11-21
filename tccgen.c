@@ -31,6 +31,15 @@
 */
 ST_DATA int rsym, anon_sym, ind, loc;
 
+/* C23 'auto x = init;' parses the initializer twice: once to infer the
+   type, then for real.  A struct, union or enum without a tag that the
+   initializer defines is recorded on the first pass and taken again on the
+   second, so that both parses give the same type (and enumerators are not
+   declared twice). */
+static Sym **auto_tags;
+static int nb_auto_tags, auto_tags_pos, auto_tags_mode; /* 1 record, 2 replay */
+
+
 ST_DATA Sym *global_stack;
 ST_DATA Sym *local_stack;
 ST_DATA Sym *define_stack;
@@ -419,6 +428,7 @@ ST_FUNC int tccgen_compile(TCCState *s1)
     funcname = "";
     func_ind = -1;
     anon_sym = SYM_FIRST_ANOM;
+    auto_tags = NULL, nb_auto_tags = auto_tags_pos = auto_tags_mode = 0;
     nocode_wanted = DATA_ONLY_WANTED; /* no code outside of functions */
     debug_modes = (s1->do_debug ? 1 : 0) | s1->test_coverage << 1;
     global_expr = 0;
@@ -6557,6 +6567,7 @@ static void struct_decl(CType *type, int u)
     int v, c, size, align, flexible;
     int bit_size, bsize, bt, ut;
     Sym *s, *ss, **ps, *redef = NULL, *redef_e = NULL;
+    int replay = 0;
     AttributeDef ad, ad1;
     CType type1, btype;
 
@@ -6593,6 +6604,14 @@ static void struct_decl(CType *type, int u)
     } else {
         if (tok != '{')
             expect("struct/union/enum name");
+        if (auto_tags_mode == 2 && auto_tags_pos < nb_auto_tags) {
+            /* second parse of an 'auto' initializer: the same type again,
+               parsed below as a C23 redefinition with the same content */
+            s = auto_tags[auto_tags_pos++];
+            v = s->v & ~SYM_STRUCT;
+            replay = 1;
+            goto do_decl;
+        }
         v = anon_sym++;
     }
     /* Record the original enum/struct/union token.  */
@@ -6601,6 +6620,8 @@ static void struct_decl(CType *type, int u)
     /* we put an undefined size for struct/union */
     s = sym_push(v | SYM_STRUCT, &type1, 0, bt ? 0 : -1);
     s->r = 0; /* default alignment is zero as gcc */
+    if (auto_tags_mode == 1 && v >= SYM_FIRST_ANOM)
+        dynarray_add(&auto_tags, &nb_auto_tags, s);
 do_decl:
     type->t = s->type.t;
     type->ref = s;
@@ -6613,7 +6634,8 @@ do_decl:
             && !(u == VT_ENUM && s->c == 0)) { /* not yet defined typed enum */
             /* C23: a redefinition with the same content is allowed; parse
                it into a new type and compare when it is complete */
-            if (tcc_state->cversion < 202311 || s->sym_scope != local_scope)
+            if (!replay && (tcc_state->cversion < 202311
+                            || s->sym_scope != local_scope))
                 tcc_error("struct/union/enum already defined");
             redef = s;
             redef_e = s->next; /* enumerators to match */
@@ -11618,6 +11640,8 @@ static int decl(int l)
     AttributeDef ad, adbase;
     ElfSym *esym;
     TokenString *auto_str;
+    Sym **auto_tags_old = NULL;
+    int nb_auto_tags_old = 0, auto_tags_pos_old = 0, auto_tags_mode_old = 0;
 
     while (1) {
 
@@ -11684,6 +11708,11 @@ static int decl(int l)
                     CType ti;
                     next();
                     skip_or_save_block(&auto_str);
+                    auto_tags_old = auto_tags, nb_auto_tags_old = nb_auto_tags;
+                    auto_tags_pos_old = auto_tags_pos;
+                    auto_tags_mode_old = auto_tags_mode;
+                    auto_tags = NULL, nb_auto_tags = auto_tags_pos = 0;
+                    auto_tags_mode = 1;
                     unget_tok(0);
                     begin_macro(auto_str, 1);
                     next();
@@ -11699,6 +11728,7 @@ static int decl(int l)
                     type.ref = ti.ref;
                     type.t = ti.t | (type.t & (VT_STORAGE | VT_CONSTANT | VT_VOLATILE));
                     /* parse the initializer again, for real */
+                    auto_tags_mode = 2;
                     macro_ptr = auto_str->str;
                     next();
                 } else if ((c23 & 1) && !(type.t & VT_ARRAY)
@@ -12000,6 +12030,11 @@ static int decl(int l)
                         if (auto_str) {
                             end_macro();
                             next();
+                            tcc_free(auto_tags);
+                            auto_tags = auto_tags_old;
+                            nb_auto_tags = nb_auto_tags_old;
+                            auto_tags_pos = auto_tags_pos_old;
+                            auto_tags_mode = auto_tags_mode_old;
                         }
                     }
 

@@ -16,7 +16,7 @@ C17. It is not exhaustive: optional features (decimal floating point
 |---|---|
 | `nullptr`, `nullptr_t` | `nullptr_t` in `<stddef.h>` |
 | `constexpr` | scalars; members and elements of structs, unions and arrays |
-| `auto` type inference, `typeof`, `typeof_unqual` | |
+| `auto` type inference, `typeof`, `typeof_unqual` | the `auto` initializer may define a struct, union or enum without a tag, e.g. `auto q = (struct { int a; }){ 1 };` |
 | `bool`, `true`, `false`, `alignas`, `alignof`, `static_assert`, `thread_local` as keywords | `true`/`false` have type `bool` |
 | `static_assert` without a message | |
 | `[[deprecated]]`, `[[fallthrough]]`, `[[maybe_unused]]`, `[[nodiscard]]`, `[[noreturn]]`, `[[unsequenced]]`, `[[reproducible]]` | also `[[__name__]]` spellings, `__has_c_attribute`; `nodiscard` and `deprecated("msg")` give warnings (default on, `-w` silences) |
@@ -97,7 +97,7 @@ tests/tccwin-tests.sh`) and, on the build host, `tests/c99rt-host.sh`.
 | `feclearexcept`, `fegetexceptflag`, `feraiseexcept`, `fesetexceptflag`, `fetestexcept`, `fegetround`, `fesetround`, `fegetenv`, `feholdexcept`, `fesetenv`, `feupdateenv`; C23 `fetestexceptflag`, `fegetmode`, `fesetmode`, `femode_t`, `FE_DFL_MODE` | `<fenv.h>` | `lib/c99fenv.c`: x87 control/status words and MXCSR together. `feraiseexcept` sets the status flags and does not trap. x86 and x86_64 only: on arm64-win32 the functions are not provided (tcc's arm64 assembler cannot read FPCR/FPSR) |
 | `strtoimax`, `strtoumax`, `wcstoimax`, `wcstoumax`, `wcstoll`, `wcstoull`, `imaxdiv`, `lldiv` | `<inttypes.h>`, `<wchar.h>`, `<stdlib.h>` | declared before but missing from msvcrt |
 | `wcstof`, `wcstold` | `<wchar.h>` | `wcstod` converted to the type (like `strtof`/`strtold`, so `wcstof` rounds twice) |
-| `isblank`, `iswblank` | `<ctype.h>`, `<wctype.h>` | |
+| `isblank`, `iswblank` | `<ctype.h>`, `<wctype.h>` | `iswblank` is declared by `<wctype.h>` whatever was included before it |
 | `quick_exit`, `at_quick_exit` (C11), `call_once`, `once_flag`, `ONCE_FLAG_INIT` (C23 moved them to `<stdlib.h>`) | `<stdlib.h>` | 32 handlers; `call_once` waits for a concurrent first call with `SwitchToThread` |
 | `TIME_MONOTONIC` base of `timespec_get`, `timespec_getres` | `<time.h>` | `QueryPerformanceCounter`; `TIME_ACTIVE` and `TIME_THREAD_ACTIVE` are not provided |
 | `strtol`, `strtoul`, `strtoll`, `strtoull`, `wcstol`, `wcstoul`, `wcstoll`, `wcstoull`, `strtoimax`, ... accept the C23 binary prefix `0b`/`0B` (base 0 or 2) | `<stdlib.h>`, `<wchar.h>`, `<inttypes.h>` | C23 mode maps them to `__tcc_` versions (`lib/c23strto.c`); `-D__TCC_MSVCRT_STRTO` opts out. Without C23 mode the plain names keep the C17 meaning |

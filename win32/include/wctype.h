@@ -126,6 +126,12 @@ int __cdecl isblank(int _C);
 #endif
 #endif
 
+/* C99 7.30.2.1.3: outside the _WCTYPE_DEFINED block, which <ctype.h> or
+   <wchar.h> may already have taken without declaring iswblank. */
+#if (defined (__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || !defined (NO_OLDNAMES)
+int __cdecl iswblank(wint_t _C);
+#endif
+
 #ifndef _WCTYPE_INLINE_DEFINED
 #define _WCTYPE_INLINE_DEFINED
 #ifndef __cplusplus
