@@ -166,6 +166,7 @@ static inline int64_t expr_const64(void);
 static void vpush64(int ty, unsigned long long v);
 static void vpush(CType *type);
 static int gvtst(int inv, int t);
+static void own_res_lost(void);
 static void gen_inline_functions(TCCState *s);
 static void free_inline_functions(TCCState *s);
 static void skip_or_save_block(TokenString **str);
@@ -1102,6 +1103,7 @@ static int gvtst(int inv, int t)
 {
     int op, x, u;
 
+    own_res_lost(); /* 'if (malloc(n))' */
     gvtst_set(inv, t);
     t = vtop->jtrue, u = vtop->jfalse;
     if (inv)
@@ -1424,6 +1426,42 @@ static void move_ref_to_global(Sym *s)
     }
 }
 
+/* ownership of the C library's allocation functions, whatever header
+   declares them (the system's on Linux, tcc-win's on Windows):
+   malloc() and friends return an owner, free() takes one, realloc() takes
+   one only if it returns non-null (see docs/OWNERSHIP.md) */
+static void own_std_attrs(Sym *s)
+{
+    static const char *const res[] = { "malloc", "calloc", "realloc",
+        "reallocarray", "aligned_alloc", "strdup", "strndup", "wcsdup",
+        "_strdup", "_wcsdup", "_recalloc", "_aligned_malloc",
+        "_aligned_offset_malloc", "_aligned_realloc", "_aligned_recalloc",
+        "_aligned_offset_realloc", "_aligned_offset_recalloc", NULL };
+    static const char *const take[] = { "free", "free_sized",
+        "free_aligned_sized", NULL };
+    static const char *const re[] = { "realloc", "reallocarray", "_recalloc",
+        "_aligned_realloc", "_aligned_recalloc", "_aligned_offset_realloc",
+        "_aligned_offset_recalloc", NULL };
+    const char *name = get_tok_str(s->v, NULL);
+    const char *const *n;
+    Sym *p = s->type.ref ? s->type.ref->next : NULL; /* first parameter */
+    int ptr_ret = s->type.ref && (s->type.ref->type.t & VT_BTYPE) == VT_PTR;
+    int ptr_par = p && (p->type.t & VT_BTYPE) == VT_PTR;
+
+    if (name[0] != 'm' && name[0] != 'c' && name[0] != 'r' && name[0] != 'a'
+        && name[0] != 's' && name[0] != 'w' && name[0] != 'f' && name[0] != '_')
+        return;
+    for (n = res; *n; ++n)
+        if (!strcmp(name, *n) && ptr_ret)
+            s->a.owner = 1;
+    for (n = take; *n; ++n)
+        if (!strcmp(name, *n) && ptr_par)
+            p->a.owner = 1;
+    for (n = re; *n; ++n)
+        if (!strcmp(name, *n) && ptr_par)
+            p->a.owner = p->a.realloc = 1;
+}
+
 /* define a new external reference to a symbol 'v' */
 static Sym *external_sym(int v, CType *type, int r, AttributeDef *ad)
 {
@@ -1446,6 +1484,11 @@ static Sym *external_sym(int v, CType *type, int r, AttributeDef *ad)
     } else {
         patch_storage(s, ad, type);
     }
+    /* declarations only: a definition (an allocator written in C) is
+       checked as written */
+    if ((s->type.t & VT_BTYPE) == VT_FUNC && (type->t & VT_EXTERN)
+        && !(s->type.t & VT_STATIC))
+        own_std_attrs(s);
     if (local_stack) {
         /* make sure that type->ref is on global stack */
         move_ref_to_global(s);
@@ -3299,7 +3342,8 @@ ST_FUNC void gen_op(int op)
     CType type1, combtype;
     int op_class = op;
 
-    nd_call = own_res_call = 0;
+    own_res_lost(); /* 'strdup(s)[0]', 'malloc(n) == NULL' */
+    nd_call = 0;
     if (((vtop[-1].type.t | vtop[0].type.t) & VT_BITINT) && gen_op_bitint(op))
         return;
 
@@ -3538,7 +3582,11 @@ static void gen_cast(CType *type)
     int sbt, dbt, sf, df, c;
     int dbt_bt, sbt_bt, ds, ss, bits, trunc;
 
-    nd_call = own_res_call = 0;
+    nd_call = 0;
+    /* an owner result keeps being one through a cast to a pointer type
+       ('(char *)malloc(n)'); '(void)f()' discards it on purpose */
+    if ((type->t & VT_BTYPE) != VT_PTR)
+        own_res_call = 0;
     if (((type->t | vtop->type.t) & VT_BITINT) && gen_cast_bitint(type))
         return;
 
@@ -4723,6 +4771,17 @@ static void own_err(struct own_var *o, const char *fmt, ...)
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     tcc_error_noabort("%s", buf);
+}
+
+/* the result of an [[owner]] call is about to be used in a way that loses
+   it (an operator, '*', '->', '[]', a condition) */
+static void own_res_lost(void)
+{
+    if (own_res_call && !nocode_wanted)
+        own_err(NULL, "result of '%s' is an owner and is lost in an expression"
+            " (leak): keep it in an [[owner]] variable",
+            get_tok_str(own_res_call, NULL));
+    own_res_call = 0;
 }
 
 static void own_report(struct own_conflict *c)
@@ -7650,6 +7709,7 @@ static CType *type_decl(CType *type, AttributeDef *ad, int *v, int td)
 /* indirection with full error checking and bound check */
 ST_FUNC void indir(void)
 {
+    own_res_lost(); /* '*malloc(n)', 'strdup(s)->x' */
     if ((vtop->type.t & VT_BTYPE) != VT_PTR) {
         if ((vtop->type.t & VT_BTYPE) == VT_FUNC)
             return;
@@ -7989,7 +8049,9 @@ ST_FUNC void unary(void)
     if (debug_modes)
         tcc_debug_line(tcc_state), tcc_tcov_check_line (tcc_state, 1);
 
-    nd_call = own_res_call = 0;
+    /* not own_res_call: an owner result is lost by the operator that
+       uses it ('strdup(s)[0]', 'malloc(n) == NULL'), see own_res_lost() */
+    nd_call = 0;
     type.ref = NULL;
     /* XXX: GCC 2.95.3 does not generate a table although it should be
        better here */
@@ -9810,7 +9872,7 @@ static void block(int flags)
 
 again:
     ++own_stmt;
-    own_rcall.v = NULL;
+    own_rcall.v = NULL, own_res_call = 0;
     while (tok == '[' && parse_c23_attribute(NULL))
         ; /* C23 attribute declaration/statement */
     t = tok;
@@ -9921,6 +9983,7 @@ again:
                 own_kids_check(mv, 0);
             gexpr();
             own_return(mv);
+            own_res_call = 0; /* 'return malloc(n);' hands it on */
             if (b) {
                 gen_assign_cast(&func_vt);
             } else {

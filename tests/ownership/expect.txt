@@ -67,3 +67,6 @@ err_realloc_borrowed.c cannot move owner 'p' while it is borrowed by 'v' (borrow
 err_realloc_fail_leak.c owner 'p' still owns a resource at 'return' (leak): release or move it (acquired at line 5)
 err_realloc_use_after.c use of owner 'p' after move (moved at line 10)
 err_discard_arg.c result of 'strdup' is an owner and is passed to a parameter that does not take ownership (leak): keep it in an [[owner]] variable
+err_lost_index.c result of 'strdup' is an owner and is lost in an expression (leak): keep it in an [[owner]] variable
+err_lost_cond.c result of 'malloc' is an owner and is lost in an expression (leak): keep it in an [[owner]] variable
+err_discard_cast.c result of 'strdup' is an owner and is passed to a parameter that does not take ownership (leak): keep it in an [[owner]] variable

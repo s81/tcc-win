@@ -29,9 +29,13 @@ int main(void)
     }
 
     /* invalid alignment */
-    CHECK(aligned_alloc(0, 16) == NULL);
-    CHECK(aligned_alloc(24, 48) == NULL);
-    CHECK(aligned_alloc(64, SIZE_MAX - 8) == NULL);
+    /* (kept in q: the result of aligned_alloc is an owner) */
+    CHECK((q = aligned_alloc(0, 16)) == NULL);
+    free(q);
+    CHECK((q = aligned_alloc(24, 48)) == NULL);
+    free(q);
+    CHECK((q = aligned_alloc(64, SIZE_MAX - 8)) == NULL);
+    free(q);
 
     /* many live blocks, mixed with ordinary ones (grows the block set) */
     for (k = 0; k < 64; k++) {

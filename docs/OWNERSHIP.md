@@ -53,8 +53,16 @@ through it. The macro `__TCC_OWNERSHIP__` and `__has_c_attribute(owner)`,
 `__has_c_attribute(borrow)`, `__has_c_attribute(borrow_mut)` are defined
 when the feature is available.
 
-In the Windows headers shipped with tcc-win, `free()` is declared as taking
-an owner, so `free(p)` releases `p`.
+**The C library's allocation functions** get their ownership from tcc
+itself, whatever header declares them (tcc-win's on Windows, the system's,
+e.g. glibc, on Linux): `free`, `free_sized` and `free_aligned_sized` take an
+owner, so `free(p)` releases `p`; `realloc` takes one as `[[tcc::realloc]]`
+(see *Reallocation*); `malloc`, `calloc`, `realloc`, `reallocarray`,
+`aligned_alloc`, `strdup`, `strndup`, `wcsdup` and the msvcrt variants
+(`_strdup`, `_wcsdup`, `_recalloc`, `_aligned_malloc`, `_aligned_realloc` ...)
+return an owner (see *Owner results*). This applies to declarations at file
+scope; a definition of one of these functions (an allocator written in C) is
+checked as written.
 
 ## Owners
 
@@ -141,15 +149,24 @@ itself, since `malloc` and the other allocation functions below are declared
 `[[owner]]`. A cast to `void` (`(void)malloc(n);`) marks an intended discard
 and is accepted.
 
-Passing such a result directly as an argument for a parameter that does not
-take ownership loses it too, and is an error as well:
+Passing such a result as an argument for a parameter that does not take
+ownership loses it too, and is an error as well; so is using it with an
+operator, `*`, `->`, `[]` or as a condition, which keeps no pointer to it.
+A cast to a pointer type (`(char *)malloc(n)`) keeps it an owner result:
 
 ```c
 size_t n = strlen(strdup(s));   // error: result of 'strdup' is an owner and is passed
                                 // to a parameter that does not take ownership (leak)
 printf("%s\n", strdup(s));      // error (variadic arguments take nothing)
+strlen((char *)strdup(s));      // error (a cast does not hide it)
+c = strdup(s)[0];               // error: result of 'strdup' is an owner and is lost
+                                // in an expression (leak)
+if (malloc(n)) ...              // error
 free(strdup(s));                // ok: free takes ownership
 take(make());                   // ok for void take([[owner]] char *p)
+p = (char *)malloc(n);          // ok: kept (in any variable)
+if ((p = malloc(n)) == NULL)    // ok
+return strdup(s);               // ok: handed to the caller
 ```
 
 A `[[borrow]]` parameter does not take ownership either.
@@ -158,11 +175,9 @@ A `[[borrow]]` parameter does not take ownership either.
 f.c:5: error: result of 'malloc' is an owner and is discarded (leak): release or keep it, or cast it to void
 ```
 
-In the Windows headers, `malloc`, `calloc`, `realloc`, `aligned_alloc`,
-`strdup`, `strndup`, `wcsdup` and the msvcrt variants (`_strdup`, `_wcsdup`,
-`_recalloc`, `_aligned_malloc`, `_aligned_realloc` ...) are declared
-`[[owner]]`. The result is not otherwise tracked at the caller: assign it to
-an `[[owner]]` variable to check it.
+`malloc` and the other allocation functions listed under *Declaring owners
+and borrows* return an owner. Once the result is kept in a variable, it is
+only tracked further if that variable is an `[[owner]]`.
 
 ## Borrows
 
@@ -271,6 +286,7 @@ line of the last one in the source is given.
 | `'a' and 'b' are passed to the same call and one of them is a mutable borrow (aliasing)` | two arguments refer to the same object |
 | `result of 'f' is an owner and is discarded (leak)` | an `[[owner]]` result (e.g. `malloc(n);`) is thrown away |
 | `result of 'f' is an owner and is passed to a parameter that does not take ownership (leak)` | e.g. `strlen(strdup(s))` |
+| `result of 'f' is an owner and is lost in an expression (leak)` | e.g. `strdup(s)[0]`, `if (malloc(n))` |
 | `cannot move out of borrow 'v'` | a borrow does not own the resource |
 | `cannot return borrow 'v' of local owner 'p'` | the result would dangle |
 | `'q' does not live long enough: it is still borrowed by 'v'` | the borrow is used after the owner `q` went out of scope |
@@ -570,10 +586,10 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
-- A discarded `[[owner]]` result is detected in an expression statement
-  (`make();`) and as an argument for a parameter that does not take
-  ownership (`strlen(strdup(s))`); other uses that drop it (`strdup(s)[0]`,
-  `if (malloc(n))`, an argument behind a cast) are not reported.
+- A lost `[[owner]]` result is detected as described under *Owner
+  results*; it is not reported when it is converted to an integer
+  (`(uintptr_t)malloc(n)`) or stored in a plain variable that is never
+  released.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
   and array element counts as one).
