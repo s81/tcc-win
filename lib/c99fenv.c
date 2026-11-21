@@ -11,6 +11,7 @@
    Without _WIN32 this file builds natively (x86) for unit tests when the
    public names are redefined with -D (see tests/c99rt-host.sh). */
 
+#if defined(__x86_64__) || defined(__i386__)
 #include <fenv.h>
 
 #define X87_FLAGS 0x3f
@@ -195,3 +196,5 @@ int fesetmode(const femode_t *modep)
     set_mxcsr((get_mxcsr() & X87_FLAGS) | (modep->__mxcsr & ~(unsigned)X87_FLAGS));
     return 0;
 }
+
+#endif /* x86: no arm64 implementation yet (tcc's arm64 assembler has no FPCR/FPSR access) */

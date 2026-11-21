@@ -27,7 +27,8 @@ int main(void)
     char *end;
     int i, j;
 
-    /* <fenv.h> */
+    /* <fenv.h> (no arm64 implementation) */
+#ifndef __aarch64__
     CHECK(feclearexcept(FE_ALL_EXCEPT) == 0 && fetestexcept(FE_ALL_EXCEPT) == 0);
     CHECK(feraiseexcept(FE_INEXACT) == 0 && fetestexcept(FE_ALL_EXCEPT) == FE_INEXACT);
     {
@@ -42,6 +43,7 @@ int main(void)
         CHECK(fesetmode(FE_DFL_MODE) == 0);
     }
     feclearexcept(FE_ALL_EXCEPT);
+#endif
 
     /* integer parsing: C99 names, and the C23 binary prefix */
     CHECK(strtoimax("-12", &end, 10) == -12 && *end == 0);

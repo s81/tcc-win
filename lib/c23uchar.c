@@ -1,8 +1,8 @@
 /* <uchar.h> conversions for Windows targets (part of libtcc1.a):
    mbrtoc8, c8rtomb, mbrtoc16, c16rtomb, mbrtoc32, c32rtomb.
 
-   The multibyte side is the C runtime's: they call msvcrt's mbrtowc and
-   wcrtomb, so the multibyte encoding is that of the current locale
+   The multibyte side is the C runtime's: they call msvcrt's mbtowc and
+   wctomb, so the multibyte encoding is that of the current locale
    (msvcrt.dll has no UTF-8 locale).  msvcrt's wchar_t is a UTF-16 code
    unit, so a multibyte character that does not fit a single UTF-16 code
    unit (outside the BMP) is not supported: such conversions fail with
@@ -22,10 +22,29 @@
 
 #ifdef _WIN32
 __declspec(dllimport) int *_errno(void);
+/* msvcrt.dll has no mbrtowc/wcrtomb: use mbtowc/wctomb.  mbtowc fails on
+   invalid and incomplete input alike, so a failure with fewer than 4 bytes
+   is reported as "incomplete" (more bytes are tried) */
+__declspec(dllimport) int mbtowc(wchar_t *, const char *, size_t);
+__declspec(dllimport) int wctomb(char *, wchar_t);
+static size_t c23_mbr(wchar_t *w, const char *s, size_t n, void *st)
+{
+    int r = mbtowc(w, s, n);
+    (void)st;
+    return r < 0 ? (n < 4 ? (size_t)-2 : (size_t)-1) : (size_t)r;
+}
+static size_t c23_wcr(char *s, wchar_t w, void *st)
+{
+    int r = wctomb(s, w);
+    (void)st;
+    return r < 0 ? (size_t)-1 : (size_t)r;
+}
 #define SET_EILSEQ() (*_errno() = 42)
 #else
 #include <errno.h>
 #define SET_EILSEQ() (errno = EILSEQ)
+#define c23_mbr(w, s, n, st) mbrtowc(w, s, n, st)
+#define c23_wcr(s, w, st) wcrtomb(s, w, st)
 #endif
 
 typedef unsigned short c16_t;
@@ -71,7 +90,7 @@ static size_t mb_read(unsigned int *st, const char *s, size_t n, unsigned *wc)
         if (cnt == 4)
             break;
         buf[cnt++] = s[used++];
-        r = mbrtowc(&w, buf, cnt, &zero);
+        r = c23_mbr(&w, buf, cnt, &zero);
         if (r == (size_t)-2)
             continue;
         if (r == (size_t)-1)
@@ -89,7 +108,7 @@ static size_t wc_write(char *s, unsigned wc)
 {
     char tmp[8];
     int zero = 0;
-    size_t r = wcrtomb(tmp, (wchar_t)wc, &zero);
+    size_t r = c23_wcr(tmp, (wchar_t)wc, &zero);
     size_t i;
     if (r == (size_t)-1 || r > 8) {
         SET_EILSEQ();

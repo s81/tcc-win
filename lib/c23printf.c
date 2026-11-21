@@ -518,10 +518,22 @@ int __tcc_printf(const char *fmt, ...)
    arguments (%S, %C, %hs, %hc: narrow; %ls, %lc: wide). */
 
 #ifdef _WIN32
-__declspec(dllimport) size_t mbrtowc(wchar_t *, const char *, size_t, void *);
+/* msvcrt.dll has no mbrtowc: use mbtowc, which fails (-1) on invalid and on
+   incomplete input alike; results are mapped to mbrtowc's */
+__declspec(dllimport) int mbtowc(wchar_t *, const char *, size_t);
+static size_t c23_mbr(wchar_t *w, const char *s, size_t n, void *st)
+{
+    int r;
+    (void)st;
+    if (n == 0)
+        return (size_t)-2;
+    r = mbtowc(w, s, n);
+    return r < 0 ? (size_t)-1 : (size_t)r;
+}
 __declspec(dllimport) int fputws(const wchar_t *, FILE_ *);
 #else
 #include <wchar.h>
+#define c23_mbr(w, s, n, st) mbrtowc(w, s, n, st)
 #endif
 
 typedef struct {
@@ -665,7 +677,7 @@ static int wformat(wout_t *o, const wchar_t *fmt, va_list ap0)
                     one = (wchar_t)ch, ws = &one, len = 1;
                 } else {
                     char b = (char)ch;
-                    if (mbrtowc(&one, &b, 1, 0) > 1)
+                    if (c23_mbr(&one, &b, 1, 0) > 1)
                         one = (wchar_t)(unsigned char)b;
                     ws = &one, len = 1;
                 }
@@ -696,7 +708,7 @@ static int wformat(wout_t *o, const wchar_t *fmt, va_list ap0)
                     bytes++;
                 while (i < (int)bytes) {
                     wchar_t w;
-                    size_t r = mbrtowc(&w, t + i, bytes - i, 0);
+                    size_t r = c23_mbr(&w, t + i, bytes - i, 0);
                     if (r == (size_t)-1 || r == (size_t)-2 || r == 0)
                         r = 1, w = (wchar_t)(unsigned char)t[i];
                     i += (int)r, nchars++;
@@ -705,7 +717,7 @@ static int wformat(wout_t *o, const wchar_t *fmt, va_list ap0)
                     wpad(o, ' ', width - nchars);
                 for (i = 0; i < (int)bytes;) {
                     wchar_t w;
-                    size_t r = mbrtowc(&w, t + i, bytes - i, 0);
+                    size_t r = c23_mbr(&w, t + i, bytes - i, 0);
                     if (r == (size_t)-1 || r == (size_t)-2 || r == 0)
                         r = 1, w = (wchar_t)(unsigned char)t[i];
                     wput(o, w);

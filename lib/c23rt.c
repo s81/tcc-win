@@ -701,13 +701,19 @@ void quick_exit(int code)
 }
 
 #ifdef _WIN32
-__declspec(dllimport) long __stdcall InterlockedCompareExchange(volatile long *, long, long);
-__declspec(dllimport) long __stdcall InterlockedExchange(volatile long *, long);
-__declspec(dllimport) int __stdcall SwitchToThread(void);
+/* tcc's atomic builtins (libtcc1's stdatomic.c/atomic.S): no kernel32 import
+   needed, and every Windows target has them */
+#include <stdatomic.h>
 __declspec(dllimport) void __stdcall Sleep(unsigned long);
-#define CAS_(p, n, o) InterlockedCompareExchange(p, n, o)
-#define XCHG_(p, v) InterlockedExchange(p, v)
-#define YIELD_() (SwitchToThread() ? (void)0 : Sleep(1))
+#define CAS_(p, n, o) cas_win(p, n, o)
+static long cas_win(volatile long *p, long n, long o)
+{
+    int exp = (int)o;
+    atomic_compare_exchange_strong((volatile atomic_int *)p, &exp, (int)n);
+    return exp;
+}
+#define XCHG_(p, v) atomic_store((volatile atomic_int *)(p), (int)(v))
+#define YIELD_() Sleep(0)
 #else
 /* host build, for tests only: not thread safe */
 static long cas_host(volatile long *p, long n, long o)
@@ -724,7 +730,7 @@ static long cas_host(volatile long *p, long n, long o)
 
 /* state: 0 not run, 1 running, 2 done.  Concurrent callers wait for the
    first one to finish.  (No unwinding if func exits abnormally.) */
-typedef struct { volatile long state; } c23_once_flag;
+typedef struct { volatile long state; } c23_once_flag; /* 32-bit on Windows */
 
 void call_once(c23_once_flag *flag, void (*func)(void))
 {
