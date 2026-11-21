@@ -4,12 +4,23 @@
 #include <string.h>
 #include <math.h>
 
-/* i386 code uses the x87 FPU, which rounds twice for subnormal results (div)
-   and for float a*b+c: those run-time checks are only counted there. */
+/* i386 code runs on the x87 FPU (precision control set to 53 bits), which
+   differs from SSE in two ways the run-time checks below allow for:
+   - a double result is first rounded to 53 bits with the x87's wider exponent
+     range, then rounded again when it is stored as a subnormal double. Double
+     division vectors with a subnormal expected result are only counted there.
+     (Subnormal add, sub and mul results in this vector set happen to round
+     the same way twice; extend SUBD_SKIP to them if a new set disagrees.)
+   - a float product a*b stays unrounded in an x87 register. FMUL rounds it
+     to float through a volatile, as the expected a*b+c values assume; the
+     final add is then correctly rounded (53 >= 2 * 24 + 2). */
 #if defined __i386__ || defined _M_IX86
-# define XCK(x) (cat_n++)
+static float fmul_x87(float a, float b) { volatile float p = a * b; return p; }
+# define FMUL(a, b) fmul_x87(a, b)
+# define SUBD_SKIP(b) (!((b) >> 52 & 0x7ff) && ((b) << 12))
 #else
-# define XCK(x) x
+# define FMUL(a, b) ((a) * (b))
+# define SUBD_SKIP(b) 0
 #endif
 
 static double D(uint64_t b) { double x; memcpy(&x, &b, 8); return x; }
@@ -3082,7 +3093,7 @@ int bench_entry(void)
     for (i = 0; i < N(d2); i++) { double a = D(d2[i].a), b = D(d2[i].b); ckd("d add", i, BD(a + b), d2[i].add); } done("rt binary64 add");
     for (i = 0; i < N(d2); i++) { double a = D(d2[i].a), b = D(d2[i].b); ckd("d sub", i, BD(a - b), d2[i].sub); } done("rt binary64 sub");
     for (i = 0; i < N(d2); i++) { double a = D(d2[i].a), b = D(d2[i].b); ckd("d mul", i, BD(a * b), d2[i].mul); } done("rt binary64 mul");
-    for (i = 0; i < N(d2); i++) { double a = D(d2[i].a), b = D(d2[i].b); XCK(ckd("d div", i, BD(a / b), d2[i].div)); } done("rt binary64 div");
+    for (i = 0; i < N(d2); i++) { double a = D(d2[i].a), b = D(d2[i].b); if (SUBD_SKIP(d2[i].div)) cat_n++; else ckd("d div", i, BD(a / b), d2[i].div); } done("rt binary64 div");
     for (i = 0; i < N(dsq); i++) ckd("d sqrt", i, BD(sqrt(D(dsq[i].a))), dsq[i].r); done("rt binary64 sqrt (crt)");
     for (i = 0; i < N(d3); i++) { double a = D(d3[i].a), b = D(d3[i].b), c = D(d3[i].c); ckd("d a*b+c", i, BD(a * b + c), d3[i].r); } done("rt binary64 a*b+c");
     for (i = 0; i < N(f2); i++) { float a = F(f2[i].a), b = F(f2[i].b); ckf("f add", i, BF(a + b), f2[i].add); } done("rt binary32 add");
@@ -3090,7 +3101,7 @@ int bench_entry(void)
     for (i = 0; i < N(f2); i++) { float a = F(f2[i].a), b = F(f2[i].b); ckf("f mul", i, BF(a * b), f2[i].mul); } done("rt binary32 mul");
     for (i = 0; i < N(f2); i++) { float a = F(f2[i].a), b = F(f2[i].b); ckf("f div", i, BF(a / b), f2[i].div); } done("rt binary32 div");
     for (i = 0; i < N(fsq); i++) ckf("f sqrt", i, BF((float)sqrt(F(fsq[i].a))), fsq[i].r); done("rt binary32 sqrt (crt)");
-    for (i = 0; i < N(f3); i++) { float a = F(f3[i].a), b = F(f3[i].b), c = F(f3[i].c); XCK(ckf("f a*b+c", i, BF(a * b + c), f3[i].r)); } done("rt binary32 a*b+c");
+    for (i = 0; i < N(f3); i++) { float a = F(f3[i].a), b = F(f3[i].b), c = F(f3[i].c); ckf("f a*b+c", i, BF(FMUL(a, b) + c), f3[i].r); } done("rt binary32 a*b+c");
     for (i = 0; i < N(ci); i++) { int64_t v = ci[i].i; ckd("i64->d", i, BD((double)v), ci[i].d); } done("rt int64->binary64");
     for (i = 0; i < N(ci); i++) { int64_t v = ci[i].i; ckf("i64->f", i, BF((float)v), ci[i].f); } done("rt int64->binary32");
     for (i = 0; i < N(cu); i++) { uint64_t v = cu[i].u; ckd("u64->d", i, BD((double)v), cu[i].d); } done("rt uint64->binary64");
