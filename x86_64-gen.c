@@ -514,6 +514,16 @@ void load(int r, SValue *sv)
                 gen_modrm64(0x8d, r, fr, sv->sym, fc);
 #else
                 if (sv->sym->type.t & VT_TLS) {
+#ifdef TCC_RUN_TLS_POSIX
+                    if (tcc_state->output_type == TCC_OUTPUT_MEMORY) {
+                        /* in-memory code: the stub leaves the thread's block
+                           in r (see tccrun.c) */
+                        Sym *stub = tcc_run_tls_stub(tcc_state, r);
+                        if (!stub)
+                            tcc_error("cannot set up thread-local variables in memory");
+                        o(0xe8), gen_addrpc32(VT_SYM, stub, 0); /* call stub */
+                    } else
+#endif
                     /* mov fs:0, r */
                     o(0x64), gen_modrm64(0x8b, r, VT_CONST, NULL, 0);
                     /* add $tpoff,r */
