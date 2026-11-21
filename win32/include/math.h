@@ -380,10 +380,18 @@ extern "C" {
   extern long long __cdecl llrintf (float);
   extern long long __cdecl llrintl (long double);
 
+  /* same values as <fenv.h> */
+  #ifdef __aarch64__
+  #define FE_TONEAREST	0x000000
+  #define FE_UPWARD	0x400000
+  #define FE_DOWNWARD	0x800000
+  #define FE_TOWARDZERO	0xc00000
+  #else
   #define FE_TONEAREST	0x0000
   #define FE_DOWNWARD	0x0400
   #define FE_UPWARD	0x0800
   #define FE_TOWARDZERO	0x0c00
+  #endif
 
   /* 7.12.9.6 */
   /* round away from zero, regardless of fpu control word settings */

@@ -547,6 +547,35 @@ static void ident_check(const unsigned char *s, int len)
     }
 }
 
+/* '\uXXXX' or '\UXXXXXXXX' at p (a universal character name) in an
+   identifier: store the code point in *cp and return the length, or 0 if p
+   does not start one.  C23 6.4.3: it must not name a surrogate or a character
+   below U+00A0 (other than $, @ and `), nor be beyond U+10FFFF. */
+static int ucn_scan(const unsigned char *p, uint32_t *cp)
+{
+    int i, n = p[1] == 'u' ? 4 : p[1] == 'U' ? 8 : 0;
+    uint32_t v = 0;
+    if (p[0] != '\\' || !n)
+        return 0;
+    for (i = 0; i < n; i++) {
+        int d = p[2 + i];
+        if (d >= '0' && d <= '9')
+            d -= '0';
+        else if (d >= 'a' && d <= 'f')
+            d -= 'a' - 10;
+        else if (d >= 'A' && d <= 'F')
+            d -= 'A' - 10;
+        else
+            return 0;
+        v = v << 4 | d;
+    }
+    if (v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF)
+        || (v < 0xA0 && v != '$' && v != '@' && v != '`'))
+        return 0;
+    *cp = v;
+    return 2 + n;
+}
+
 #define TOK_HASH_INIT 1
 #define TOK_HASH_FUNC(h, c) ((h) + ((h) << 5) + ((h) >> 27) + (c))
 
@@ -3275,6 +3304,15 @@ static void next_nomacro(void)
         p++;
         goto redo_no_start;
     case '\\':
+        if (!(parse_flags & PARSE_FLAG_ASM_FILE)) {
+            uint32_t u;
+            if (ucn_scan(p, &u)) {
+                /* an identifier that starts with a universal character name */
+                cstr_reset(&tokcstr);
+                c = '\\';
+                goto ident_ucn;
+            }
+        }
         /* first look if it is in fact an end of buffer */
         c = handle_stray(&p);
         if (c == '\\')
@@ -3407,12 +3445,39 @@ maybe_newline:
             /* slower case */
             cstr_reset(&tokcstr);
             cstr_cat(&tokcstr, (char *) p1, len);
-            p--;
-            PEEKC(c, p);
-            while (isidnum_table[c - CH_EOF] & (IS_ID|IS_NUM))
-            {
+            c = *p; /* the '\\' that ended the fast scan */
+        ident_ucn:
+            /* the rest of the identifier: line continuations and, in C,
+               universal character names (stored as UTF-8) */
+            for (;;) {
+                if (c == '\\') {
+                    uint32_t u;
+                    int n;
+                    if (!(parse_flags & PARSE_FLAG_ASM_FILE)
+                        && (n = ucn_scan(p, &u))) {
+                        cstr_u8cat(&tokcstr, u);
+                        p += n;
+                        c = *p;
+                        continue;
+                    }
+                    file->buf_ptr = p - 1;
+                    c = handle_stray_noerror(0);
+                    p = file->buf_ptr;
+                    if (c == '\\') {
+                        if (!(parse_flags & PARSE_FLAG_ASM_FILE)
+                            && (n = ucn_scan(p, &u))) {
+                            cstr_u8cat(&tokcstr, u);
+                            p += n;
+                            c = *p;
+                            continue;
+                        }
+                        break; /* a stray '\\' ends the identifier */
+                    }
+                }
+                if (!(isidnum_table[c - CH_EOF] & (IS_ID|IS_NUM)))
+                    break;
                 cstr_ccat(&tokcstr, c);
-                PEEKC(c, p);
+                c = *++p;
             }
             ts = tok_alloc(tokcstr.data, tokcstr.size);
             if (!(parse_flags & PARSE_FLAG_ASM_FILE))
