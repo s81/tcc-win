@@ -497,6 +497,17 @@ static void arm64_sym(int r, Sym *sym, addr_t addend)
             o(0xf94003c0 | r); // ldr xr, [x30]
         }
 #else
+#ifdef TCC_RUN_TLS_POSIX
+        if (tcc_state->output_type == TCC_OUTPUT_MEMORY) {
+            /* in-memory code: a stub leaves the thread's block in xr
+               (see tccrun.c); x30 is scratch here, as below */
+            Sym *stub = tcc_run_tls_stub(tcc_state, r);
+            if (!stub)
+                tcc_error("cannot set up thread-local variables in memory");
+            arm64_reloca(stub, R_AARCH64_CALL26, 0);
+            o(ARM64_BL); /* bl stub */
+        } else
+#endif
         o(0xd53bd040 | r); /* mrs xr, tpidr_el0 */
 #endif
         arm64_reloca(sym, R_AARCH64_TLSLE_ADD_TPREL_HI12, addend);

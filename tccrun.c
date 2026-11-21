@@ -19,6 +19,9 @@
  */
 
 #include "tcc.h"
+#ifdef TCC_RUN_TLS_POSIX
+# include <pthread.h>
+#endif
 
 /* only native compiler supports -run */
 #ifdef TCC_IS_NATIVE
@@ -389,6 +392,221 @@ ST_FUNC int tcc_run_tls(TCCState *s1, Sym **tramp)
     return (int)t->tls;
 }
 
+#elif defined TCC_RUN_TLS_POSIX
+
+/* thread-local storage of in-memory code (ELF targets)
+
+   Code in memory is not loaded by the dynamic loader, so it gets no slot in
+   the thread control block either. Instead each image owns a pthread key.
+   The code generator calls a stub (one per destination register) for every
+   thread-local access; the stub saves all registers the C calling convention
+   lets a callee change except the destination one, calls rt_tls_get() and
+   returns the thread's block in that register. A block is made on the
+   thread's first access by copying the template (the image's TLS sections,
+   placed together by tcc_relocate_ex). The key's destructor frees a block
+   when its thread exits; unloading the code frees the rest. Unloading code
+   while another thread is exiting is not supported. */
+
+typedef struct TCCRunTLSBlock {
+    struct TCCRunTLSBlock *next, **pprev;
+    struct TCCRunTLS *t;
+    void *data;
+} TCCRunTLSBlock;
+
+typedef struct TCCRunTLS {
+    pthread_key_t key;
+    pthread_mutex_t lock;       /* protects blocks */
+    TCCRunTLSBlock *blocks;     /* the blocks of all threads */
+    void *tmpl;                 /* template: the TLS sections of the run image */
+    size_t size, align;
+    Section *sec;               /* the stubs */
+    unsigned have;              /* bit r: stub for register r exists */
+    Sym sym[32];                /* the stubs, for relocations */
+} TCCRunTLS;
+
+static void rt_tls_destroy(void *p)
+{
+    TCCRunTLSBlock *b = p;
+    TCCRunTLS *t = b->t;
+    pthread_mutex_lock(&t->lock);
+    if (b->next)
+        b->next->pprev = b->pprev;
+    *b->pprev = b->next;
+    pthread_mutex_unlock(&t->lock);
+    free(b);
+}
+
+/* called by the stubs: the current thread's block, made on first use */
+static void *rt_tls_get(TCCRunTLS *t)
+{
+    TCCRunTLSBlock *b = pthread_getspecific(t->key);
+    if (!b) {
+        b = malloc(sizeof *b + t->size + t->align);
+        if (!b) {
+            fprintf(stderr, "tcc: out of memory for thread-local storage\n");
+            abort();
+        }
+        b->t = t;
+        b->data = (void *)(((uintptr_t)(b + 1) + t->align - 1) & ~(uintptr_t)(t->align - 1));
+        memcpy(b->data, t->tmpl, t->size);
+        pthread_mutex_lock(&t->lock);
+        b->next = t->blocks, b->pprev = &t->blocks;
+        if (b->next)
+            b->next->pprev = &b->next;
+        t->blocks = b;
+        pthread_mutex_unlock(&t->lock);
+        pthread_setspecific(t->key, b);
+    }
+    return b->data;
+}
+
+static void rt_tls_release(TCCRunTLS *t)
+{
+    TCCRunTLSBlock *b;
+    if (!t)
+        return;
+    pthread_key_delete(t->key); /* no destructor runs after this */
+    while ((b = t->blocks) != NULL) {
+        t->blocks = b->next;
+        free(b);
+    }
+    pthread_mutex_destroy(&t->lock);
+    tcc_free(t);
+}
+
+/* Emit the stub for register reg; 0 if the code generator cannot use reg. */
+static int rt_tls_stub(TCCState *s1, TCCRunTLS *t, int reg)
+{
+    Section *sec = t->sec;
+    unsigned char *p;
+    int n, off;
+#define B(x) (c[n++] = (unsigned char)(x))
+#if defined TCC_TARGET_X86_64
+    /* rbp frame; rax rcx rdx rsi rdi r8-r11 pushed at rbp-8 ... rbp-72;
+       xmm0-7 saved below (the SysV ABI has no callee-saved xmm) */
+    static const signed char slot[12] = { -8, -16, -24, 0, 0, 0, -32, -40, -48, -56, -64, -72 };
+    unsigned char c[256];
+    int i;
+    if (reg < 0 || reg > 11 || !slot[reg])
+        return 0;
+    n = 0;
+    B(0x55), B(0x48), B(0x89), B(0xe5);                 /* push rbp; mov rbp,rsp */
+    B(0x50), B(0x51), B(0x52), B(0x56), B(0x57);        /* push rax rcx rdx rsi rdi */
+    B(0x41), B(0x50), B(0x41), B(0x51), B(0x41), B(0x52), B(0x41), B(0x53); /* push r8-r11 */
+    B(0x48), B(0x83), B(0xe4), B(0xf0);                 /* and rsp,-16 */
+    B(0x48), B(0x81), B(0xec), B(0x80), B(0), B(0), B(0); /* sub rsp,0x80 */
+    for (i = 0; i < 8; i++)                             /* movdqu [rsp+16*i],xmm_i */
+        B(0xf3), B(0x0f), B(0x7f), B(0x44 | i << 3), B(0x24), B(16 * i);
+    B(0x48), B(0xbf), p = c + n, n += 8;                /* mov rdi,t */
+    write64le(p, (uint64_t)(uintptr_t)t);
+    B(0x48), B(0xb8), p = c + n, n += 8;                /* mov rax,rt_tls_get */
+    write64le(p, (uint64_t)(uintptr_t)rt_tls_get);
+    B(0xff), B(0xd0);                                   /* call rax */
+    B(0x48), B(0x89), B(0x45), B(slot[reg]);            /* mov [rbp+slot],rax: the result */
+    for (i = 0; i < 8; i++)                             /* movdqu xmm_i,[rsp+16*i] */
+        B(0xf3), B(0x0f), B(0x6f), B(0x44 | i << 3), B(0x24), B(16 * i);
+    B(0x48), B(0x8d), B(0x65), B(0xb8);                 /* lea rsp,[rbp-72] */
+    B(0x41), B(0x5b), B(0x41), B(0x5a), B(0x41), B(0x59), B(0x41), B(0x58); /* pop r11-r8 */
+    B(0x5f), B(0x5e), B(0x5a), B(0x59), B(0x58);        /* pop rdi rsi rdx rcx rax */
+    B(0x5d), B(0xc3);                                   /* pop rbp; ret */
+#elif defined TCC_TARGET_I386
+    unsigned char c[64];
+    if (reg < 0 || reg > 7 || reg == 4)
+        return 0;
+    n = 0;
+    B(0x55), B(0x89), B(0xe5);                          /* push ebp; mov ebp,esp */
+    B(0x60);                                            /* pushad: eax at ebp-4, ecx -8 ... */
+    B(0x83), B(0xe4), B(0xf0);                          /* and esp,-16 */
+    B(0x83), B(0xec), B(0x0c);                          /* sub esp,12 */
+    B(0x68), p = c + n, n += 4;                         /* push t: esp is 16-aligned */
+    write32le(p, (uint32_t)(uintptr_t)t);
+    B(0xb8), p = c + n, n += 4;                         /* mov eax,rt_tls_get */
+    write32le(p, (uint32_t)(uintptr_t)rt_tls_get);
+    B(0xff), B(0xd0);                                   /* call eax */
+    B(0x89), B(0x45), B(-4 - 4 * reg);                  /* mov [ebp-4-4*reg],eax: the result */
+    B(0x8d), B(0x65), B(0xe0);                          /* lea esp,[ebp-32] */
+    B(0x61), B(0x5d), B(0xc3);                          /* popad; pop ebp; ret */
+#elif defined TCC_TARGET_ARM64
+    /* x0-x17 saved at sp+0..143, q0-q31 at sp+144..655 */
+    uint32_t w[80];
+    int i = 0, j;
+    if (reg < 0 || reg > 17)
+        return 0;
+    w[i++] = 0xa9bf7bfd;                                /* stp x29,x30,[sp,#-16]! */
+    w[i++] = 0x910003fd;                                /* mov x29,sp */
+    w[i++] = 0xd10a43ff;                                /* sub sp,sp,#0x290 */
+    for (j = 0; j < 18; j += 2)                         /* stp xj,xj+1,[sp,#8*j] */
+        w[i++] = 0xa9000000 | j << 15 | (j + 1) << 10 | 31 << 5 | j;
+    for (j = 0; j < 32; j += 2)                         /* stp qj,qj+1,[sp,#144+16*j] */
+        w[i++] = 0xad000000 | (9 + j) << 15 | (j + 1) << 10 | 31 << 5 | j;
+    w[i++] = 0;                                         /* ldr x0,=t (patched below) */
+    w[i++] = 0;                                         /* ldr x16,=rt_tls_get */
+    w[i++] = 0xd63f0200;                                /* blr x16 */
+    w[i++] = 0xf90003e0 | reg << 10;                    /* str x0,[sp,#8*reg]: the result */
+    for (j = 0; j < 32; j += 2)
+        w[i++] = 0xad400000 | (9 + j) << 15 | (j + 1) << 10 | 31 << 5 | j;
+    for (j = 0; j < 18; j += 2)
+        w[i++] = 0xa9400000 | j << 15 | (j + 1) << 10 | 31 << 5 | j;
+    w[i++] = 0x910a43ff;                                /* add sp,sp,#0x290 */
+    w[i++] = 0xa8c17bfd;                                /* ldp x29,x30,[sp],#16 */
+    w[i++] = 0xd65f03c0;                                /* ret */
+    if (i & 1)
+        w[i++] = 0xd503201f;                            /* nop: 8-byte align the literals */
+    j = 3 + 9 + 16;                                     /* index of the first ldr */
+    w[j]     = 0x58000000 | (i - j) << 5 | 0;           /* ldr x0,lit */
+    w[j + 1] = 0x58000000 | (i + 2 - (j + 1)) << 5 | 16; /* ldr x16,lit+8 */
+#else
+# error "no thread-local storage stub for this target"
+#endif
+    section_ptr_add(sec, -sec->data_offset & 15);       /* 16-byte aligned stubs */
+    off = sec->data_offset;
+#if defined TCC_TARGET_ARM64
+    p = section_ptr_add(sec, n = i * 4 + 16);
+    for (j = 0; j < i; j++)
+        write32le(p + 4 * j, w[j]);
+    write64le(p + 4 * i, (uint64_t)(uintptr_t)t);
+    write64le(p + 4 * i + 8, (uint64_t)(uintptr_t)rt_tls_get);
+#else
+    p = section_ptr_add(sec, n);
+    memcpy(p, c, n);
+#endif
+#undef B
+    {
+        char name[32];
+        snprintf(name, sizeof name, "__tcc_tls_stub%d", reg);
+        t->sym[reg].c = put_elf_sym(symtab_section, off, n,
+            ELFW(ST_INFO)(STB_LOCAL, STT_FUNC), 0, sec->sh_num, name);
+    }
+    return 1;
+}
+
+/* called by the code generators for every thread-local access in in-memory
+   code; returns the stub that leaves the thread's block in register reg, or
+   NULL if no pthread key is free or the generator cannot use reg */
+ST_FUNC Sym *tcc_run_tls_stub(TCCState *s1, int reg)
+{
+    TCCRunTLS *t = s1->run_tls;
+    if (!t) {
+        t = tcc_mallocz(sizeof *t);
+        if (pthread_key_create(&t->key, rt_tls_destroy)) {
+            tcc_free(t);
+            return NULL;
+        }
+        pthread_mutex_init(&t->lock, NULL);
+        t->sec = new_section(s1, ".text.tcctls", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR);
+        t->sec->sh_addralign = 16;
+        s1->run_tls = t;
+    }
+    if (reg < 0 || reg >= 32)
+        return NULL;
+    if (!(t->have >> reg & 1)) {
+        if (!rt_tls_stub(s1, t, reg))
+            return NULL;
+        t->have |= 1u << reg;
+    }
+    return &t->sym[reg];
+}
+
 #else
 # define rt_tls_release(t)
 #endif
@@ -403,7 +621,7 @@ ST_FUNC void tcc_run_free(TCCState *s1)
         if ( ref->handle )
             rt_free_dll(ref->handle);
     }
-#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+#ifdef TCC_RUN_TLS
     rt_tls_release(s1->run_tls); /* also after a failed compile */
     s1->run_tls = NULL;
 #endif
@@ -430,7 +648,7 @@ struct TCCCode {
     void **dlls;            /* modules loaded for this code */
     TCCCodeSym *syms;       /* global symbols, sorted by name */
     char leading_underscore;
-#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+#ifdef TCC_RUN_TLS
     TCCRunTLS *tls;         /* thread-local storage, if the code has any */
 #endif
 };
@@ -492,7 +710,7 @@ LIBTCCAPI TCCCode *tcc_detach(TCCState *s1)
 #ifdef _WIN64
     s1->run_function_table = NULL;
 #endif
-#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+#ifdef TCC_RUN_TLS
     c->tls = s1->run_tls, s1->run_tls = NULL;
 #endif
     /* the state no longer has code: empty its symbol table */
@@ -527,7 +745,7 @@ LIBTCCAPI void tcc_code_free(TCCCode *c)
     for (i = 0; i < c->nb_dlls; i++)
         rt_free_dll(c->dlls[i]);
     rt_release(c->ptr, c->size, c->function_table);
-#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+#ifdef TCC_RUN_TLS
     rt_tls_release(c->tls);
 #endif
     tcc_free(c);
@@ -660,6 +878,13 @@ static int tcc_relocate_ex(TCCState *s1, void *ptr, unsigned ptr_diff)
     unsigned length, align, i, k, f;
     unsigned n, copy;
     addr_t mem, addr;
+#ifdef TCC_RUN_TLS_POSIX
+    unsigned tls_align = 16; /* the largest alignment of a TLS section */
+
+    for (i = 1; i < s1->nb_sections; i++)
+        if ((s1->sections[i]->sh_flags & SHF_TLS) && s1->sections[i]->sh_addralign > tls_align)
+            tls_align = s1->sections[i]->sh_addralign;
+#endif
 
     if (NULL == ptr) {
         s1->nb_errors = 0;
@@ -716,12 +941,16 @@ redo:
                 continue;
             }
 
-#if !(defined TCC_TARGET_PE && defined TCC_IS_NATIVE)
+#ifndef TCC_RUN_TLS
             if ((s->sh_flags & SHF_TLS) && length)
                 return tcc_error_noabort("thread-local storage not supported with -run");
 #endif
 
             align = s->sh_addralign;
+#ifdef TCC_RUN_TLS_POSIX
+            if (k == 3) /* one alignment for all: offsets in a block are those in the template */
+                align = tls_align;
+#endif
             if (++n == 1) {
 #if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
                 /* To avoid that x86 processors would reload cached instructions
@@ -739,7 +968,7 @@ redo:
             offset += -(addr + offset) & (align - 1);
             s->sh_addr = mem ? addr + offset : 0;
             offset += length;
-#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+#ifdef TCC_RUN_TLS
             if (k == 3 && mem) {
                 /* thread-local offsets count from the first TLS section */
                 if (n == 1)
@@ -747,6 +976,9 @@ redo:
                 if (s1->run_tls) {
                     s1->run_tls->tmpl = (void *)(uintptr_t)s1->tls_start;
                     s1->run_tls->size = s->sh_addr + length - s1->tls_start;
+#ifdef TCC_RUN_TLS_POSIX
+                    s1->run_tls->align = tls_align;
+#endif
                 }
             }
 #endif

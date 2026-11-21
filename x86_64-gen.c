@@ -333,6 +333,21 @@ static void gen_modrm_impl(int opcode, int ll, int op_reg_0, int r, Sym *sym, in
         orex(ll, r, op_reg_0, opcode), oad(0x80 | op_reg | r, 0);
         greloca(cur_text_section, sym, ind - 4, R_X86_64_TPOFF32, c);
 #else
+#ifdef TCC_RUN_TLS_POSIX
+        if (tcc_state->output_type == TCC_OUTPUT_MEMORY) {
+            /* in-memory code: a stub leaves the thread's block in r
+               (see tccrun.c); the offset is from the start of the block */
+            Sym *stub;
+            r = get_reg(RC_INT);
+            stub = tcc_run_tls_stub(tcc_state, r);
+            if (!stub)
+                tcc_error("cannot set up thread-local variables in memory");
+            o(0xe8), gen_addrpc32(VT_SYM, stub, 0); /* call stub */
+            orex(ll, r, op_reg_0, opcode), oad(0x80 | op_reg | REG_VALUE(r), 0);
+            greloca(cur_text_section, sym, ind - 4, R_X86_64_TPOFF32, c);
+            return;
+        }
+#endif
         o(0x64); /* fs segment prefix */
         orex(ll, r, op_reg_0, opcode);
 	o(0x04 | op_reg); /* [sib] | destreg */
