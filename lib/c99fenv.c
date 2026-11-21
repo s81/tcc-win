@@ -8,11 +8,14 @@
    exceptions unmasked (via _controlfp) no signal is delivered.
    long double is double on these targets.
 
+   ARM64: FPCR (rounding, trap enables) and FPSR (flags).
+
    Without _WIN32 this file builds natively (x86) for unit tests when the
    public names are redefined with -D (see tests/c99rt-host.sh). */
 
-#if defined(__x86_64__) || defined(__i386__)
 #include <fenv.h>
+
+#if defined(__x86_64__) || defined(__i386__)
 
 #define X87_FLAGS 0x3f
 #define X87_RC    0x0c00
@@ -197,4 +200,142 @@ int fesetmode(const femode_t *modep)
     return 0;
 }
 
-#endif /* x86: no arm64 implementation yet (tcc's arm64 assembler has no FPCR/FPSR access) */
+#elif defined(__aarch64__)
+
+/* ARM64: the FPCR (rounding mode in bits 23:22, trap enables in bits 12:8)
+   and the FPSR (cumulative flags in bits 4:0, the same positions as the FE_*
+   values).  Windows on ARM64 does not deliver traps for the enable bits;
+   feraiseexcept only sets the flags. */
+
+#define FPCR_RMODE 0xc00000u
+#define FPCR_TRAPS 0x1f00u
+
+static unsigned get_fpcr(void)
+{
+    unsigned long long v;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(v));
+    return (unsigned)v;
+}
+
+static void set_fpcr(unsigned v)
+{
+    unsigned long long x = v;
+    __asm__ volatile("msr fpcr, %0" : : "r"(x));
+}
+
+static unsigned get_fpsr(void)
+{
+    unsigned long long v;
+    __asm__ volatile("mrs %0, fpsr" : "=r"(v));
+    return (unsigned)v;
+}
+
+static void set_fpsr(unsigned v)
+{
+    unsigned long long x = v;
+    __asm__ volatile("msr fpsr, %0" : : "r"(x));
+}
+
+int feclearexcept(int excepts)
+{
+    if (excepts & ~FE_ALL_EXCEPT)
+        return 1;
+    set_fpsr(get_fpsr() & ~(unsigned)excepts);
+    return 0;
+}
+
+int fetestexcept(int excepts)
+{
+    return get_fpsr() & excepts & FE_ALL_EXCEPT;
+}
+
+int feraiseexcept(int excepts)
+{
+    if (excepts & ~FE_ALL_EXCEPT)
+        return 1;
+    set_fpsr(get_fpsr() | excepts);
+    return 0;
+}
+
+int fegetexceptflag(fexcept_t *flagp, int excepts)
+{
+    *flagp = get_fpsr() & excepts & FE_ALL_EXCEPT;
+    return 0;
+}
+
+int fesetexceptflag(const fexcept_t *flagp, int excepts)
+{
+    unsigned m = excepts & FE_ALL_EXCEPT;
+    set_fpsr((get_fpsr() & ~m) | (*flagp & m));
+    return 0;
+}
+
+/* C23 */
+int fetestexceptflag(const fexcept_t *flagp, int excepts)
+{
+    return *flagp & excepts & FE_ALL_EXCEPT;
+}
+
+int fegetround(void)
+{
+    return get_fpcr() & FPCR_RMODE;
+}
+
+int fesetround(int mode)
+{
+    if (mode & ~FPCR_RMODE)
+        return 1;
+    set_fpcr((get_fpcr() & ~FPCR_RMODE) | mode);
+    return 0;
+}
+
+int fegetenv(fenv_t *envp)
+{
+    envp->__fpcr = get_fpcr();
+    envp->__fpsr = get_fpsr();
+    return 0;
+}
+
+int fesetenv(const fenv_t *envp)
+{
+    if (envp == FE_DFL_ENV) {
+        set_fpcr(0);
+        set_fpsr(0);
+    } else {
+        set_fpcr(envp->__fpcr);
+        set_fpsr(envp->__fpsr);
+    }
+    return 0;
+}
+
+int feholdexcept(fenv_t *envp)
+{
+    fegetenv(envp);
+    set_fpsr(get_fpsr() & ~(unsigned)FE_ALL_EXCEPT);
+    /* non-stop mode: no exception traps */
+    set_fpcr(get_fpcr() & ~FPCR_TRAPS);
+    return 0;
+}
+
+int feupdateenv(const fenv_t *envp)
+{
+    unsigned raised = get_fpsr() & FE_ALL_EXCEPT;
+    int r = fesetenv(envp);
+    set_fpsr(get_fpsr() | raised);
+    return r;
+}
+
+/* C23 7.6.5: control modes (rounding, trap enables), no flags */
+int fegetmode(femode_t *modep)
+{
+    modep->__fpcr = get_fpcr();
+    return 0;
+}
+
+int fesetmode(const femode_t *modep)
+{
+    set_fpcr(modep == FE_DFL_MODE ? 0 : modep->__fpcr);
+    return 0;
+}
+
+#endif /* x86, arm64 */

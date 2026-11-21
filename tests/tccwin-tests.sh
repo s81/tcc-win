@@ -34,6 +34,7 @@ check_ok "$top/tests/c23" c23_lib_c99.c -Wall
 check_ok "$top/tests/c23" c23_version_macros.c -Wall
 check_ok "$top/tests/c23" c23_final_gaps.c -Wall
 check_ok "$top/tests/c23" c23_ident_utf8.c -Wall
+check_ok "$top/tests/c23" c23_ident_ucn.c -Wall
 check_ok "$top/tests/c23" c23_utf_macros.c -Wall
 check_ok "$top/tests/c23" c23_va_opt_paste.c -Wall
 check_ok "$top/tests/c23" c23_has_attr_scoped.c -Wall
