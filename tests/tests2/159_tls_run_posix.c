@@ -24,6 +24,8 @@ static int counter(void)
 }
 
 static volatile int bad;
+#define MARK(n) (printf("M%d
+", n), fflush(stdout))
 #define CHK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); bad = 1; } } while (0)
 
 static int *addr[9];
@@ -56,6 +58,10 @@ int main(void)
 {
     pthread_t h[8];
     int i, distinct = 1;
+    MARK(1);
+    { int x = ti; MARK(2); x += tz; MARK(3); (void)x; }
+    { int *q = &ti; MARK(4); (void)q; }
+    { double d = td; MARK(5); (void)d; }
 
     CHK(ti == 7 && tz == 0 && td == 2.5 && !strcmp(tbuf, "init"));
     CHK(*tp == 42 && tf[2] == 3.5f && tl == 1LL << 50);
