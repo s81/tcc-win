@@ -70,3 +70,7 @@ err_discard_arg.c result of 'strdup' is an owner and is passed to a parameter th
 err_lost_index.c result of 'strdup' is an owner and is lost in an expression (leak): keep it in an [[owner]] variable
 err_lost_cond.c result of 'malloc' is an owner and is lost in an expression (leak): keep it in an [[owner]] variable
 err_discard_cast.c result of 'strdup' is an owner and is passed to a parameter that does not take ownership (leak): keep it in an [[owner]] variable
+err_implicit_leak.c owner 'p' still owns a resource at 'return' (leak)
+err_implicit_noretain.c owner 'p' still owns a resource at end of scope (leak)
+err_implicit_overwrite.c assignment overwrites owner 'p' which still owns a resource (leak)
+err_cast_int.c result of 'malloc' is an owner and is lost in an expression (leak)
