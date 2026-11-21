@@ -26,6 +26,9 @@ static volatile int bad;
 #define CHK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); bad = 1; } } while (0)
 
 static int *addr[9];
+/* all workers stay alive until each has recorded the address of its 'ti':
+   the block of a thread that has exited may be reused by the next one */
+static HANDLE ready[8], go;
 
 static DWORD WINAPI worker(LPVOID arg)
 {
@@ -36,6 +39,8 @@ static DWORD WINAPI worker(LPVOID arg)
     CHK(((INT_PTR)&al64 & 63) == 0 && ((INT_PTR)&al32 & 31) == 0 && !strcmp(al64, "a64") && al32 == 7);
     CHK(counter() == 101);
     addr[id] = &ti;
+    SetEvent(ready[id]);
+    WaitForSingleObject(go, INFINITE);
     for (i = 0; i < 1000; i++) {
         ti += id, tz -= id, td += 1.0;
         Sleep(0);   /* let the other threads interleave */
@@ -60,11 +65,17 @@ int main(void)
     CHK(counter() == 101 && counter() == 102);
     addr[8] = &ti;
 
-    for (i = 0; i < 8; i++)
+    go = CreateEventA(NULL, TRUE, FALSE, NULL);
+    for (i = 0; i < 8; i++) {
+        ready[i] = CreateEventA(NULL, TRUE, FALSE, NULL);
         h[i] = CreateThread(NULL, 0, worker, (LPVOID)(INT_PTR)i, 0, NULL);
+    }
+    WaitForMultipleObjects(8, ready, TRUE, INFINITE);
+    SetEvent(go);
     WaitForMultipleObjects(8, h, TRUE, INFINITE);
     for (i = 0; i < 8; i++)
-        CloseHandle(h[i]);
+        CloseHandle(h[i]), CloseHandle(ready[i]);
+    CloseHandle(go);
 
     /* the threads did not touch the main thread's copies */
     CHK(ti == -1 && tz == 5 && td == 0.25 && !strcmp(tbuf, "main") && ts.a == -11);
