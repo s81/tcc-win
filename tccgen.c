@@ -10179,9 +10179,10 @@ again:
                     if (nd_call)
                         tcc_warning("ignoring return value of '%s' declared with attribute 'nodiscard'",
                             nd_call > 0 ? get_tok_str(nd_call, NULL) : "function");
-                    if (own_res_call) /* a warning: plain C code gets it too */
-                        tcc_warning("result of '%s' is an owner and is discarded (leak):"
-                            " release or keep it", get_tok_str(own_res_call, NULL));
+                    if (own_res_call) /* '(void)f()' is an explicit discard */
+                        own_err(NULL, "result of '%s' is an owner and is discarded (leak):"
+                            " release or keep it, or cast it to void",
+                            get_tok_str(own_res_call, NULL));
                     nd_call = own_res_call = 0;
                     vpop();
                 }

@@ -134,12 +134,15 @@ makes it undefined), so do not reallocate to size 0.
 ## Owner results
 
 A function declared `[[owner]]` returns a resource that the caller must
-keep. Calling it as a statement and discarding the result is reported as a
-warning (not an error, because plain C code that does not use ownership gets
-it too; `-Werror` makes it one, `-w` or a cast to `void` silences it):
+keep. Calling it as a statement and discarding the result is an error, like
+the other ownership errors (all of them are reported, then compilation
+fails). This applies to all code, also code that does not use `[[owner]]`
+itself, since `malloc` and the other allocation functions below are declared
+`[[owner]]`. A cast to `void` (`(void)malloc(n);`) marks an intended discard
+and is accepted.
 
 ```
-f.c:5: warning: result of 'malloc' is an owner and is discarded (leak): release or keep it
+f.c:5: error: result of 'malloc' is an owner and is discarded (leak): release or keep it, or cast it to void
 ```
 
 In the Windows headers, `malloc`, `calloc`, `realloc`, `aligned_alloc`,
@@ -253,6 +256,7 @@ line of the last one in the source is given.
 | `cannot pass 'p' as mutable borrow while it is borrowed by 'v'` | conflicting borrow at a call |
 | `cannot pass shared borrow 's' as mutable borrow` | shared borrows are read-only |
 | `'a' and 'b' are passed to the same call and one of them is a mutable borrow (aliasing)` | two arguments refer to the same object |
+| `result of 'f' is an owner and is discarded (leak)` | an `[[owner]]` result (e.g. `malloc(n);`) is thrown away |
 | `cannot move out of borrow 'v'` | a borrow does not own the resource |
 | `cannot return borrow 'v' of local owner 'p'` | the result would dangle |
 | `'q' does not live long enough: it is still borrowed by 'v'` | the borrow is used after the owner `q` went out of scope |
