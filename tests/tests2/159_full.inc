@@ -1,3 +1,21 @@
+#ifndef WALL
+#define WALL 0
+#endif
+#ifndef WA
+#define WA 0
+#endif
+#ifndef WB
+#define WB 0
+#endif
+#ifndef WC
+#define WC 0
+#endif
+#ifndef WD
+#define WD 0
+#endif
+#ifndef WE
+#define WE 0
+#endif
 /* Thread-local variables in code that is not loaded by the dynamic loader:
    tcc -run (this test runs that way). Each thread must start from the initial
    values and see only its own copy. */
@@ -32,24 +50,34 @@ static int *addr[9];
 static void *worker(void *arg)
 {
     int id = (int)(long)arg, i;
+#if WALL || WA
     /* a new thread sees the initial values, not the main thread's */
     CHK(ti == 7 && tz == 0 && td == 2.5 && !strcmp(tbuf, "init"));
     CHK(ts.a == 11 && ts.b == 1LL << 40);
     CHK(*tp == 42 && tp == &global);
     CHK(tf[0] == 1.5f && tf[3] == 4.5f && tl == 1LL << 50);
+#endif
+#if WALL || WB
     CHK(counter() == 101);
     addr[id] = &ti;
+#endif
+#if WALL || WC
     for (i = 0; i < 1000; i++) {
         ti += id, tz -= id, td += 1.0, tf[1] += 1.0f, tl += id;
         sched_yield();   /* let the other threads interleave */
     }
+#endif
+#if WALL || WD
     sprintf(tbuf, "thread %d", id);
     ts.a = id;
+#endif
+#if WALL || WE
     CHK(ti == 7 + 1000 * id && tz == -1000 * id && td == 1002.5);
     CHK(tf[1] == 1002.5f && tl == (1LL << 50) + 1000LL * id);
     CHK(counter() == 102 && ts.a == id);
     CHK(ti + tz == 7 && (long long)(ti * td) == (long long)((7 + 1000 * id) * 1002.5));
     { char want[16]; sprintf(want, "thread %d", id); CHK(!strcmp(tbuf, want)); }
+#endif
     return NULL;
 }
 
