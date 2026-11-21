@@ -17,8 +17,10 @@ static int counter(void)
     return ++n;
 }
 
-static volatile LONG bad;
-#define CHK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); InterlockedIncrement(&bad); } } while (0)
+/* only ever set to 1, so no atomic is needed (InterlockedIncrement is an
+   intrinsic, not a kernel32 export, on arm64) */
+static volatile int bad;
+#define CHK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); bad = 1; } } while (0)
 
 static int *addr[9];
 
