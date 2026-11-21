@@ -69,20 +69,20 @@ extern "C" {
      to wrappers in libtcc1.a (lib/c23rt.c, docs/C23-STATUS.md).
      -D__TCC_MSVCRT_FREE opts out (and then aligned_alloc is not declared). */
   void __cdecl free(__attribute__((owner)) void *_Memory) __asm__("__tcc_free");
-  void *__cdecl realloc(void *_Memory,size_t _NewSize) __asm__("__tcc_realloc");
+  void *__cdecl realloc(__attribute__((realloc)) void *_Memory,size_t _NewSize) __asm__("__tcc_realloc");
 #else
   void __cdecl free(__attribute__((owner)) void *_Memory);
-  void *__cdecl realloc(void *_Memory,size_t _NewSize);
+  void *__cdecl realloc(__attribute__((realloc)) void *_Memory,size_t _NewSize);
 #endif
   void *__cdecl malloc(size_t _Size);
-  _CRTIMP void *__cdecl _recalloc(void *_Memory,size_t _Count,size_t _Size);
+  _CRTIMP void *__cdecl _recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size);
   _CRTIMP void __cdecl _aligned_free(void *_Memory);
   _CRTIMP void *__cdecl _aligned_malloc(size_t _Size,size_t _Alignment);
   _CRTIMP void *__cdecl _aligned_offset_malloc(size_t _Size,size_t _Alignment,size_t _Offset);
-  _CRTIMP void *__cdecl _aligned_realloc(void *_Memory,size_t _Size,size_t _Alignment);
-  _CRTIMP void *__cdecl _aligned_recalloc(void *_Memory,size_t _Count,size_t _Size,size_t _Alignment);
-  _CRTIMP void *__cdecl _aligned_offset_realloc(void *_Memory,size_t _Size,size_t _Alignment,size_t _Offset);
-  _CRTIMP void *__cdecl _aligned_offset_recalloc(void *_Memory,size_t _Count,size_t _Size,size_t _Alignment,size_t _Offset);
+  _CRTIMP void *__cdecl _aligned_realloc(__attribute__((realloc)) void *_Memory,size_t _Size,size_t _Alignment);
+  _CRTIMP void *__cdecl _aligned_recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size,size_t _Alignment);
+  _CRTIMP void *__cdecl _aligned_offset_realloc(__attribute__((realloc)) void *_Memory,size_t _Size,size_t _Alignment,size_t _Offset);
+  _CRTIMP void *__cdecl _aligned_offset_recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size,size_t _Alignment,size_t _Offset);
 #endif
 
 #define _MAX_WAIT_MALLOC_CRT 60000

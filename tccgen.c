@@ -4306,7 +4306,20 @@ struct own_var {
     int own_line;  /* owner: where it got its current resource */
     int move_line; /* owner: where it was last moved */
     int brw_line;  /* borrow: where it got its current value */
+    int mgen;      /* owner: number of moves so far */
+    /* owner 'q' of 'q = realloc(p, n)': if 'q' turns out null, 'p' was not
+       taken and gets back its state from before the call */
+    Sym *rsym;     /* 'p', or NULL */
+    int ridx, rgen, rline;
+    unsigned char rst;
 };
+
+/* the last argument passed to a [[tcc::realloc]] parameter, see own_rlink() */
+static struct {
+    struct own_var *v;
+    int gen, line, pos; /* pos: tok_count after the call, -1 while parsed */
+    unsigned char st;
+} own_rcall;
 
 /* A conflict with a borrow (e.g. moving the owner it borrows from) is an
    error only if the borrow is used again later (non-lexical lifetimes).
@@ -4863,6 +4876,8 @@ static struct own_var *own_new(Sym *s, int kind, int st)
     o->own_line = st == OWN_OWNED ? own_line_now() : 0;
     o->move_line = 0;
     o->brw_line = kind != OWN_OWNER && st == OWN_OWNED ? own_line_now() : 0;
+    o->mgen = 0;
+    o->rsym = NULL;
     return o;
 }
 
@@ -5245,6 +5260,22 @@ static void own_use_struct(const struct own_path *p, int addrof)
     }
 }
 
+/* 'o = expr' has been parsed: the old value of owner 'o' is lost unless the
+   right hand side moved it */
+static void own_check_overwrite(struct own_var *o)
+{
+    if (o->kind == OWN_OWNER && ((o->st == OWN_OWNED
+        /* a field of the caller's object that was not touched yet may
+           be uninitialized (init functions) */
+        && !(o->ptr && o->own_line < 0)) || (o->st == OWN_MAYBE
+        && !(o->lazy && o->own_line < 0)))) {
+        char at[48];
+        own_err(o, "assignment overwrites owner '%s' which %s owns a resource (leak)%s",
+            own_name(o), o->st == OWN_OWNED ? "still" : "possibly still",
+            own_at(at, "acquired", o->own_line));
+    }
+}
+
 static void own_use_o(struct own_var *o, int addrof)
 {
     const char *name = own_name(o);
@@ -5257,16 +5288,8 @@ static void own_use_o(struct own_var *o, int addrof)
             else
                 own_read(o); /* may not run: the old value may live on */
         }
-        if (o->kind == OWN_OWNER && ((o->st == OWN_OWNED
-            /* a field of the caller's object that was not touched yet may
-               be uninitialized (init functions) */
-            && !(o->ptr && o->own_line < 0)) || (o->st == OWN_MAYBE
-            && !(o->lazy && o->own_line < 0)))) {
-            char at[48];
-            own_err(o, "assignment overwrites owner '%s' which %s owns a resource (leak)%s",
-                name, o->st == OWN_OWNED ? "still" : "possibly still",
-                own_at(at, "acquired", o->own_line));
-        }
+        /* the leak check itself is made by own_check_overwrite() once the
+           right hand side is parsed: it may move the owner (p = realloc(p, n)) */
         own_pending = o;
         return;
     }
@@ -5603,8 +5626,13 @@ static int own_peek_nullinit(void)
 
 static void own_narrow(struct own_var *o)
 {
-    if (o && o->kind == OWN_OWNER && o->st == OWN_OWNED)
+    if (o && o->kind == OWN_OWNER && o->st == OWN_OWNED) {
+        struct own_var *p = o->rsym && o->ridx < own_n ? &own_vars[o->ridx] : NULL;
         o->st = OWN_NULL;
+        /* 'q = realloc(p, n)' failed: 'p' still owns its resource */
+        if (p && p->sym == o->rsym && p->st == OWN_MOVED && p->mgen == o->rgen)
+            p->st = o->rst, p->own_line = o->rline;
+    }
 }
 
 /* ownership of 'o' is moved away */
@@ -5629,6 +5657,7 @@ static void own_move(struct own_var *o)
                     " by an argument of the same call", own_name(o));
     o->st = OWN_MOVED;
     o->move_line = own_line_now();
+    ++o->mgen;
     own_kids_reset(o);
 }
 
@@ -5660,6 +5689,7 @@ static void own_assign(struct own_var *dst, struct own_var *src)
 {
     if (!dst || nocode_wanted)
         return;
+    dst->rsym = NULL;
     if (dst->kind == OWN_OWNER) {
         own_move(src);
         dst->st = (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
@@ -5670,6 +5700,21 @@ static void own_assign(struct own_var *dst, struct own_var *src)
     } else {
         own_borrow_init(dst, src);
     }
+}
+
+/* owner 'q' was just initialized or assigned: if its value was exactly the
+   result of a call with a [[tcc::realloc]] argument 'p' ('q = realloc(p,
+   n)', also with a cast), a null test of 'q' gives 'p' back (own_narrow) */
+static void own_rlink(struct own_var *q)
+{
+    struct own_var *p = own_rcall.v;
+    own_rcall.v = NULL;
+    if (!q || !p || nocode_wanted || q->kind != OWN_OWNER || q == p
+        || own_rcall.pos != tok_count || q->st != OWN_OWNED
+        || p->st != OWN_MOVED || p->mgen != own_rcall.gen)
+        return;
+    q->rsym = p->sym, q->ridx = p - own_vars, q->rgen = own_rcall.gen;
+    q->rst = own_rcall.st, q->rline = own_rcall.line;
 }
 
 /* 'return o;' */
@@ -5724,9 +5769,14 @@ static void own_arg(Sym *sa, struct own_var *mv)
 {
     if (!sa || !mv)
         return;
-    if (sa->a.owner)
+    if (sa->a.owner) {
+        int st = mv->st, line = mv->own_line;
         own_move(mv);
-    else if (sa->a.borrow)
+        if (sa->a.realloc && !nocode_wanted && mv->kind == OWN_OWNER) {
+            own_rcall.v = mv, own_rcall.gen = mv->mgen, own_rcall.pos = -1;
+            own_rcall.st = st, own_rcall.line = line;
+        }
+    } else if (sa->a.borrow)
         own_call_borrow(mv, sa->a.borrow);
 }
 
@@ -5928,6 +5978,8 @@ static int parse_c23_attribute(AttributeDef *ad)
             ad->f.func_noreturn = 1;
         else if (!strcmp(name, "owner") || !strcmp(name, "__owner__"))
             ad->a.owner = 1;
+        else if (!strcmp(name, "realloc") || !strcmp(name, "__realloc__"))
+            ad->a.owner = ad->a.realloc = 1;
         else if (!strcmp(name, "borrow") || !strcmp(name, "__borrow__"))
             ad->a.borrow = OWN_SHARED;
         else if (!strcmp(name, "borrow_mut") || !strcmp(name, "__borrow_mut__"))
@@ -6183,6 +6235,11 @@ redo:
             if (!strcmp(get_tok_str(t, NULL), "owner")
                 || !strcmp(get_tok_str(t, NULL), "__owner__")) {
                 ad->a.owner = 1;
+                break;
+            }
+            if (!strcmp(get_tok_str(t, NULL), "realloc")
+                || !strcmp(get_tok_str(t, NULL), "__realloc__")) {
+                ad->a.owner = ad->a.realloc = 1;
                 break;
             }
             if (!strcmp(get_tok_str(t, NULL), "borrow")
@@ -7303,6 +7360,7 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                    nocode_wanted) Example: int func(int a, int b[++a]); */
                 s = sym_push(n, &pt, VT_LOCAL|VT_LVAL, 0);
                 s->a.owner = ad1.a.owner;
+                s->a.realloc = ad1.a.realloc;
                 s->a.borrow = ad1.a.borrow;
                 *plast = s;
                 plast = &s->next;
@@ -8795,6 +8853,8 @@ special_math_val:
             own_cur_call = ocall.prev; /* call borrows end */
 
             next();
+            if (own_rcall.v && own_rcall.pos == -1)
+                own_rcall.pos = tok_count; /* see own_rlink() */
             vcheck_cmp(); /* the generators don't like VT_CMP on vtop */
             gfunc_call(nb_args);
 
@@ -9250,7 +9310,10 @@ static void expr_eq(void)
             own_lending = dst && dst->kind != OWN_OWNER ? mv : NULL;
             expr_eq();
             own_lending = NULL;
+            if (dst)
+                own_check_overwrite(dst);
             own_assign(dst, mv);
+            own_rlink(dst);
             own_sassign(&sdst, has_ssrc ? &ssrc : NULL);
         } else {
             vdup();
@@ -9705,6 +9768,7 @@ static void block(int flags)
 
 again:
     ++own_stmt;
+    own_rcall.v = NULL;
     while (tok == '[' && parse_c23_attribute(NULL))
         ; /* C23 attribute declaration/statement */
     t = tok;
@@ -11476,6 +11540,7 @@ static void gen_function(Sym *sym)
     tcc_debug_prolog_epilog(tcc_state, 0);
     func_vla_arg(sym);
     own_n = 0, own_brk = own_sw = own_cont = NULL, own_pending = NULL, own_cur_call = NULL;
+    own_rcall.v = NULL;
     own_nconflicts = own_nloops = own_cond = 0;
     own_sdot.sym = own_spending.sym = own_slast.sym = NULL, own_si.ref = NULL;
     own_sidx = NULL, own_noesc = NULL;
@@ -11966,6 +12031,8 @@ static int decl(int l)
                                 own_move(mv);
                             own_declare(sym_find(v), ad.a.owner ? st
                                 : has_init ? OWN_OWNED : OWN_MOVED);
+                            if (ad.a.owner && has_init && own_n > n0)
+                                own_rlink(&own_vars[own_n - 1]);
                             if (ad.a.borrow && has_init && own_n > n0)
                                 own_borrow_init(&own_vars[own_n - 1], mv);
                         } else if (ad.a.owner && r == VT_LOCAL && !nocode_wanted

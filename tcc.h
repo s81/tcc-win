@@ -532,7 +532,9 @@ struct SymAttr {
     deprecated  : 1, /* [[deprecated]] (message: see depr_msgs) */
     nodiscard   : 1, /* struct/union/enum tag declared [[nodiscard]] */
     thread      : 1, /* __declspec(thread), taken over by parse_btype */
-    xxxx        : 9; /* not used */
+    realloc     : 1, /* [[tcc::realloc]] parameter: an owner that is only
+                        taken if the function returns non-null */
+    xxxx        : 8; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */
