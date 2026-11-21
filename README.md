@@ -171,7 +171,9 @@ so the compiler state can be deleted while the code stays callable
   import nothing, and in in-memory code (`-run`, libtcc): there each thread
   gets its own copy on first use, freed when the thread exits or the code is
   unloaded. In-memory code needs a free Win32 TLS slot below 64, and must not
-  switch fibers while using thread-local variables.
+  switch fibers while using thread-local variables. On ELF targets (x86_64,
+  i386 and arm64 Linux and BSD) in-memory code works the same way, with a
+  pthread key instead of the Win32 slots; macOS is not covered.
 - Floating-point constants are converted exactly: decimal and hexadecimal
   literals (`float`, `double` and `long double`, which is `double` on
   Windows), and constant folding of `+ - * /` and of integer-to-floating

@@ -201,6 +201,17 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # endif
 #endif
 
+/* thread-local variables in in-memory code (see tccrun.c): TCC_RUN_TLS on the
+   targets that have it, TCC_RUN_TLS_POSIX where it is built on pthread keys */
+#if defined TCC_IS_NATIVE
+# if defined TCC_TARGET_PE
+#  define TCC_RUN_TLS 1
+# elif !defined TCC_TARGET_MACHO && (defined TCC_TARGET_X86_64         || defined TCC_TARGET_I386 || defined TCC_TARGET_ARM64)
+#  define TCC_RUN_TLS 1
+#  define TCC_RUN_TLS_POSIX 1
+# endif
+#endif
+
 #if defined CONFIG_TCC_BACKTRACE && CONFIG_TCC_BACKTRACE==0
 # undef CONFIG_TCC_BACKTRACE
 #else
@@ -998,7 +1009,7 @@ struct TCCState {
 #ifdef _WIN64
     void *run_function_table; /* unwind data */
 #endif
-#if defined TCC_TARGET_PE && defined TCC_IS_NATIVE
+#ifdef TCC_RUN_TLS
     struct TCCRunTLS *run_tls; /* thread-local storage of in-memory code */
 #endif
     struct TCCState *next;
@@ -1835,6 +1846,10 @@ ST_FUNC void tcc_run_free(TCCState *s1);
 /* in-memory code: Win32 TLS slot holding the thread's block, and the
    trampoline to call when it is still NULL (see tccrun.c) */
 ST_FUNC int tcc_run_tls(TCCState *s1, Sym **tramp);
+#elif defined TCC_RUN_TLS_POSIX
+/* in-memory code: the stub that returns the thread's block in register reg
+   (a code generator register number), or NULL if no key is free */
+ST_FUNC Sym *tcc_run_tls_stub(TCCState *s1, int reg);
 #endif
 #endif
 

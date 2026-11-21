@@ -270,6 +270,21 @@ static void gen_modrm(int opc, int op_r2, int r, Sym *sym, int c)
         o(opc), oad(0x80 | op_reg | r, c); /* mov #c(r),op_reg */
         greloc(cur_text_section, sym, ind - 4, R_386_TLS_LE);
 #else
+#ifdef TCC_RUN_TLS_POSIX
+        if (tcc_state->output_type == TCC_OUTPUT_MEMORY) {
+            /* in-memory code: a stub leaves the thread's block in r
+               (see tccrun.c); the offset is from the start of the block */
+            Sym *stub;
+            r = get_reg(RC_INT);
+            stub = tcc_run_tls_stub(tcc_state, r);
+            if (!stub)
+                tcc_error("cannot set up thread-local variables in memory");
+            o(0xe8), gen_addrpc32(VT_SYM, stub, 0); /* call stub */
+            o(opc), oad(0x80 | op_reg | r, c);
+            greloc(cur_text_section, sym, ind - 4, R_386_TLS_LE);
+            return;
+        }
+#endif
         o(0x65); /* gs segment prefix */
         o(opc), oad(0x05 | op_reg, c);
         greloc(cur_text_section, sym, ind - 4, R_386_TLS_LE);
@@ -382,6 +397,16 @@ ST_FUNC void load(int r, SValue *sv)
 #ifdef TCC_TARGET_PE
             gen_modrm(0x8d, r, fr, sv->sym, fc);
 #else
+#ifdef TCC_RUN_TLS_POSIX
+            if (tcc_state->output_type == TCC_OUTPUT_MEMORY) {
+                /* in-memory code: the stub leaves the thread's block in r
+                   (see tccrun.c) */
+                Sym *stub = tcc_run_tls_stub(tcc_state, r);
+                if (!stub)
+                    tcc_error("cannot set up thread-local variables in memory");
+                o(0xe8), gen_addrpc32(VT_SYM, stub, 0); /* call stub */
+            } else
+#endif
             oad(0x058b65 | REG_VALUE(r) << 19, 0); /* mov gs:0,r */
             oad(0xC081 | REG_VALUE(r) << 8, fc); /* add tpoffs,r */
             greloc(cur_text_section, sv->sym, ind - 4, R_386_TLS_LE);

@@ -112,7 +112,9 @@ detached or not:
   with thread-local variables uses one Win32 TLS slot, which must be below 64
   (otherwise compiling fails with `no free Win32 TLS slot for thread-local
   variables in memory`), and one FLS slot. Code that switches fibers must not
-  use thread-local variables.
+  use thread-local variables. On ELF targets (x86_64, i386 and arm64) it works
+  the same way with one pthread key per image instead of the Win32 slots;
+  unloading the code while another thread is exiting is not supported.
 - **2 GiB limit.** An in-memory image larger than 2 GiB is an error, as is a
   single section over 2 GiB in an in-memory image or a PE file. The message
   names the section, for example

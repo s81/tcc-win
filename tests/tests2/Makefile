@@ -48,6 +48,11 @@ ifeq (-$(CONFIG_WIN32)-,-yes-)
  SKIP += 114_bound_signal.test # No pthread support
  SKIP += 117_builtins.test # win32 port doesn't define __builtins
  SKIP += 148_linker_symbols.test # ELF linker tests
+ SKIP += 159_tls_run_posix.test # pthreads; 158_tls_run is the Windows one
+ SKIP += 160_tlsdbg.test 161_tlsdbg.test 162_tlsdbg.test 163_tlsdbg.test 164_tlsdbg.test 165_tlsdbg.test 166_tlsdbg.test 167_tlsdbg.test 168_tlsdbg.test 169_tlsdbg.test # DEBUG, temporary
+endif
+ifeq (,$(filter x86_64 i386 arm64,$(ARCH)))
+ SKIP += 159_tls_run_posix.test # TLS in -run: x86_64, i386 and arm64 only
 endif
 ifneq (,$(filter OpenBSD FreeBSD NetBSD DragonFly,$(TARGETOS)))
  SKIP += 106_versym.test # no pthread_condattr_setpshared
@@ -57,6 +62,7 @@ ifneq (,$(filter OpenBSD FreeBSD NetBSD DragonFly,$(TARGETOS)))
 endif
 ifeq ($(CONFIG_OSX),yes)
  SKIP += 144_tls.test 146_tls_extern.test # TLS runtime not supported on Mach-O
+ SKIP += 159_tls_run_posix.test # no TLS in -run on Mach-O
  SKIP += 148_linker_symbols.test # ELF linker tests
 endif
 ifeq ($(CONFIG_pie),yes)

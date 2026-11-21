@@ -374,8 +374,9 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr,
 #if TCC_TARGET_PE
             int64_t tp_offset = val - s1->tls_start;
 #else
-            /* glibc arm64: tp points to tcbhead_t (DTV), TLS data starts after it */
-            int64_t tp_offset = val - s1->tls_start + 16;
+            /* glibc arm64: tp points to tcbhead_t (DTV), TLS data starts after it;
+               in-memory code counts from the start of its own block */
+            int64_t tp_offset = val - s1->tls_start + (s1->output_type == TCC_OUTPUT_MEMORY ? 0 : 16);
 #endif
             int64_t imm;
             if (type == R_AARCH64_TLSLE_ADD_TPREL_HI12)
