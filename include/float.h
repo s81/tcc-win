@@ -21,6 +21,9 @@
 #define FLT_MAX_EXP 128
 #define FLT_MAX 3.40282347e+38F
 #define FLT_MAX_10_EXP 38
+#define FLT_TRUE_MIN 1.40129846e-45F
+#define FLT_DECIMAL_DIG 9
+#define FLT_HAS_SUBNORM 1
 
 /* IEEE double */
 #define DBL_MANT_DIG 53
@@ -32,9 +35,12 @@
 #define DBL_MAX_EXP 1024
 #define DBL_MAX 1.7976931348623157e+308
 #define DBL_MAX_10_EXP 308
+#define DBL_TRUE_MIN 4.9406564584124654e-324
+#define DBL_DECIMAL_DIG 17
+#define DBL_HAS_SUBNORM 1
 
-/* horrible intel long double */
-#if defined __i386__ || defined __x86_64__
+/* horrible intel long double (but long double is a double on Windows, also on arm64) */
+#if (defined __i386__ || defined __x86_64__) && !defined _WIN32
 
 #define LDBL_MANT_DIG 64
 #define LDBL_DIG 18
@@ -45,9 +51,12 @@
 #define LDBL_MAX_EXP 16384
 #define LDBL_MAX 1.18973149535723176502e+4932L
 #define LDBL_MAX_10_EXP 4932
+#define LDBL_TRUE_MIN 3.64519953188247460253e-4951L
+#define LDBL_DECIMAL_DIG 21
+#define LDBL_HAS_SUBNORM 1
 #define DECIMAL_DIG 21
 
-#elif defined __aarch64__ || defined __riscv
+#elif (defined __aarch64__ || defined __riscv) && !defined _WIN32
 /*
  * Use values from:
  * gcc -dM -E -xc /dev/null | grep LDBL | sed -e "s/__//g"
@@ -61,6 +70,9 @@
 #define LDBL_MAX_EXP 16384
 #define LDBL_MAX 1.18973149535723176508575932662800702e+4932L
 #define LDBL_MAX_10_EXP 4932
+#define LDBL_TRUE_MIN 6.47517511943802511092443895822764655e-4966L
+#define LDBL_DECIMAL_DIG 36
+#define LDBL_HAS_SUBNORM 1
 #define DECIMAL_DIG 36
 
 #else
@@ -75,6 +87,9 @@
 #define LDBL_MAX_EXP 1024
 #define LDBL_MAX 1.7976931348623157e+308L
 #define LDBL_MAX_10_EXP 308
+#define LDBL_TRUE_MIN 4.9406564584124654e-324L
+#define LDBL_DECIMAL_DIG 17
+#define LDBL_HAS_SUBNORM 1
 #define DECIMAL_DIG 17
 
 #endif

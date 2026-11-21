@@ -1222,8 +1222,15 @@ struct filespec {
 #define TOK_CWB     0xd0 /* C23 _BitInt constant (suffix wb) */
 #define TOK_CUWB    0xd1 /* C23 unsigned _BitInt constant (suffix uwb) */
 #define TOK_CU8CHAR 0xd2 /* C23 u8 character constant (unsigned char) */
+#define TOK_C16CHAR 0xd3 /* u'c' (char16_t) */
+#define TOK_C32CHAR 0xd4 /* U'c' (char32_t) */
+#define TOK_U8STR   0xd5 /* u8"s": char8_t (unsigned char) elements */
+#define TOK_U16STR  0xd6 /* u"s": char16_t elements */
+#define TOK_U32STR  0xd7 /* U"s": char32_t elements */
 
-#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_CU8CHAR)
+#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_U32STR)
+/* any string literal token (value in tokc.str) */
+#define TOK_IS_STR(t) ((t) == TOK_STR || (t) == TOK_LSTR || ((t) >= TOK_U8STR && (t) <= TOK_U32STR))
 
 #define TOK_EOF       (-1)  /* end of file */
 #define TOK_LINEFEED  10    /* line feed */

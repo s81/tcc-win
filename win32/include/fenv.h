@@ -5,6 +5,9 @@
  */
 #ifndef _FENV_H_
 #define _FENV_H_
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_FENV_H__ 202311L
+#endif
 
 #include <_mingw.h>
 
@@ -62,6 +65,17 @@ typedef struct
 } fenv_t;
 
 
+/* C23: the floating point control modes (rounding direction, exception
+   masks), without the exception flags */
+typedef struct
+{
+  unsigned short __control_word;
+  unsigned int   __mxcsr;
+} femode_t;
+
+/* The default control modes (C23 7.6.1) */
+#define FE_DFL_MODE ((const femode_t *) 0)
+
 /*The C99 standard (7.6.9) allows us to define implementation-specific macros for
   different fp environments */
   
@@ -99,6 +113,13 @@ extern int __cdecl fegetenv(fenv_t * envp);
 extern int __cdecl fesetenv(const fenv_t * );
 extern int __cdecl feupdateenv(const fenv_t *);
 extern int __cdecl feholdexcept(fenv_t *);
+
+/* C23 7.6.5 Control modes */
+extern int __cdecl fegetmode(femode_t *);
+extern int __cdecl fesetmode(const femode_t *);
+
+/* C23 7.6.4.2 */
+extern int __cdecl fetestexceptflag(const fexcept_t *, int);
 
 #ifdef __cplusplus
 }

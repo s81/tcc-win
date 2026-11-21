@@ -63,3 +63,13 @@ int main(void)
     printf("%s\n", fail ? "FAIL" : "constexpr aggregates ok");
     return fail;
 }
+
+/* representable initializers are accepted (the err_constexpr_range_* files are not) */
+constexpr unsigned char c_uc = 255;
+constexpr signed char c_sc = -128;
+constexpr float c_f = 0.5;
+constexpr float c_f2 = 16777216;
+constexpr int c_i = 2.0;
+constexpr unsigned long long c_ull = 18446744073709551615ull;
+struct CR { unsigned char c; float f; unsigned b : 3; };
+constexpr struct CR c_cr = { 255, 0.5, 7 };

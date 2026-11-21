@@ -271,6 +271,65 @@ typedef struct {
 #define SCNuFAST8 "hhu"
 #endif /* __STDC_VERSION__ >= 199901 */
 
+#if defined (__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+/* C23 7.8.1: binary conversions.  msvcrt's printf and scanf lack %b; the
+   C23 <stdio.h> maps them to the __tcc_ versions that implement it. */
+#define PRIb8 "b"
+#define PRIb16 "b"
+#define PRIb32 "b"
+#define PRIb64 "I64b"
+#define PRIbLEAST8 "b"
+#define PRIbLEAST16 "b"
+#define PRIbLEAST32 "b"
+#define PRIbLEAST64 "I64b"
+#define PRIbFAST8 "b"
+#define PRIbFAST16 "b"
+#define PRIbFAST32 "b"
+#define PRIbFAST64 "I64b"
+#define PRIbMAX "I64b"
+#ifdef _WIN64
+#define PRIbPTR "I64b"
+#else
+#define PRIbPTR "b"
+#endif
+#define PRIB8 "B"
+#define PRIB16 "B"
+#define PRIB32 "B"
+#define PRIB64 "I64B"
+#define PRIBLEAST8 "B"
+#define PRIBLEAST16 "B"
+#define PRIBLEAST32 "B"
+#define PRIBLEAST64 "I64B"
+#define PRIBFAST8 "B"
+#define PRIBFAST16 "B"
+#define PRIBFAST32 "B"
+#define PRIBFAST64 "I64B"
+#define PRIBMAX "I64B"
+#ifdef _WIN64
+#define PRIBPTR "I64B"
+#else
+#define PRIBPTR "B"
+#endif
+#define SCNb8 "hhb"
+#define SCNb16 "hb"
+#define SCNb32 "b"
+#define SCNb64 "I64b"
+#define SCNbLEAST8 "hhb"
+#define SCNbLEAST16 "hb"
+#define SCNbLEAST32 "b"
+#define SCNbLEAST64 "I64b"
+#define SCNbFAST8 "hhb"
+#define SCNbFAST16 "hb"
+#define SCNbFAST32 "b"
+#define SCNbFAST64 "I64b"
+#define SCNbMAX "I64b"
+#ifdef _WIN64
+#define SCNbPTR "I64b"
+#else
+#define SCNbPTR "b"
+#endif
+#endif /* C23 */
+
 #endif	/* !defined(__cplusplus) || defined(__STDC_FORMAT_MACROS) */
 
 intmax_t __cdecl imaxabs (intmax_t j);
@@ -289,6 +348,21 @@ intmax_t __cdecl wcstoimax (const wchar_t* __restrict__ nptr,
                             wchar_t** __restrict__ endptr, int base);
 uintmax_t __cdecl wcstoumax (const wchar_t* __restrict__ nptr,
 			     wchar_t** __restrict__ endptr, int base);
+
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_INTTYPES_H__ 202311L
+/* C23: binary prefix (see <stdlib.h>) */
+long long __cdecl __tcc_strtoll(const char *, char **, int);
+unsigned long long __cdecl __tcc_strtoull(const char *, char **, int);
+long long __cdecl __tcc_wcstoll(const wchar_t *, wchar_t **, int);
+unsigned long long __cdecl __tcc_wcstoull(const wchar_t *, wchar_t **, int);
+#ifndef __TCC_MSVCRT_STRTO
+#define strtoimax __tcc_strtoll
+#define strtoumax __tcc_strtoull
+#define wcstoimax __tcc_wcstoll
+#define wcstoumax __tcc_wcstoull
+#endif
+#endif
 
 #ifdef	__cplusplus
 }

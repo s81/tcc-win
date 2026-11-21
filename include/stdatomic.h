@@ -11,6 +11,9 @@
 
 #ifndef _STDATOMIC_H
 #define _STDATOMIC_H
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_STDATOMIC_H__ 202311L
+#endif
 
 #include <stddef.h>
 #include <stdint.h>

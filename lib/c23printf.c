@@ -12,6 +12,9 @@
    arguments widened to 64 bits (I64), and the exponent of e/E/g/G output
    is then cut to at least two digits.
 
+   The wide family (__tcc_wprintf, __tcc_fwprintf, __tcc_swprintf, __tcc_v*)
+   is at the end of this file.
+
    This file must not include <stdio.h>: the wrappers call msvcrt directly.
    Without _WIN32 it builds against the host C library for unit tests; the
    msvcrt exponent style is then simulated. */
@@ -504,5 +507,349 @@ int __tcc_printf(const char *fmt, ...)
 {
     va_list ap; int r;
     va_start(ap, fmt); r = __tcc_vfprintf(STDOUT_, fmt, ap); va_end(ap);
+    return r;
+}
+
+/* ================================================================== */
+/* wide-character family (wprintf, fwprintf, swprintf, v*): %b/%B,
+   C99 swprintf (with a size) and the exponent/INF fixes of the narrow
+   ones.  Numbers are formatted by __tcc_snprintf above and widened.
+   As in msvcrt, an unqualified %s and %c in these functions take wide
+   arguments (%S, %C, %hs, %hc: narrow; %ls, %lc: wide). */
+
+#ifdef _WIN32
+/* msvcrt.dll has no mbrtowc: use mbtowc, which fails (-1) on invalid and on
+   incomplete input alike; results are mapped to mbrtowc's */
+__declspec(dllimport) int mbtowc(wchar_t *, const char *, size_t);
+static size_t c23_mbr(wchar_t *w, const char *s, size_t n, void *st)
+{
+    int r;
+    (void)st;
+    if (n == 0)
+        return (size_t)-2;
+    r = mbtowc(w, s, n);
+    return r < 0 ? (size_t)-1 : (size_t)r;
+}
+__declspec(dllimport) int fputws(const wchar_t *, FILE_ *);
+#else
+#include <wchar.h>
+#define c23_mbr(w, s, n, st) mbrtowc(w, s, n, st)
+#endif
+
+typedef struct {
+    wchar_t *buf;
+    size_t n, len;
+} wout_t;
+
+static void wput(wout_t *o, int c)
+{
+    if (o->len + 1 < o->n)
+        o->buf[o->len] = (wchar_t)c;
+    o->len++;
+}
+
+static void wpad(wout_t *o, int c, int k)
+{
+    while (k-- > 0)
+        wput(o, c);
+}
+
+static void wput_ascii(wout_t *o, const char *s, int len)
+{
+    int i;
+    for (i = 0; i < len; i++)
+        wput(o, (unsigned char)s[i]);
+}
+
+/* ap is consumed according to the conversions in fmt */
+static int wformat(wout_t *o, const wchar_t *fmt, va_list ap0)
+{
+    const wchar_t *p = fmt, *q;
+    va_list ap;
+
+    va_copy(ap, ap0);
+    while (*p) {
+        int left = 0, plus = 0, space = 0, alt = 0, zero = 0;
+        int width = -1, prec = -1, lm = L_NONE, c, k, sl;
+        char spec[64], sbuf[512], *s;
+        int slen;
+
+        if (*p != '%') {
+            wput(o, *p++);
+            continue;
+        }
+        q = p++;
+        for (;; p++) {
+            if (*p == '-') left = 1;
+            else if (*p == '+') plus = 1;
+            else if (*p == ' ') space = 1;
+            else if (*p == '#') alt = 1;
+            else if (*p == '0') zero = 1;
+            else break;
+        }
+        if (*p == '*') {
+            width = va_arg(ap, int), p++;
+            if (width < 0)
+                left = 1, width = width == INT32_MIN ? INT32_MAX : -width;
+        } else if (*p >= '0' && *p <= '9') {
+            for (width = 0; *p >= '0' && *p <= '9'; p++)
+                width = width * 10 + (*p - '0');
+        }
+        if (*p == '.') {
+            p++;
+            if (*p == '*') {
+                prec = va_arg(ap, int), p++;
+                if (prec < 0)
+                    prec = -1;
+            } else {
+                for (prec = 0; *p >= '0' && *p <= '9'; p++)
+                    prec = prec * 10 + (*p - '0');
+            }
+        }
+        switch (*p) {
+        case 'h': lm = p[1] == 'h' ? (p += 2, L_HH) : (p++, L_H); break;
+        case 'l': lm = p[1] == 'l' ? (p += 2, L_LL) : (p++, L_L); break;
+        case 'j': lm = L_J, p++; break;
+        case 'z': lm = L_Z, p++; break;
+        case 't': lm = L_T, p++; break;
+        case 'L': lm = L_BIGL, p++; break;
+        case 'q': lm = L_LL, p++; break;
+        case 'w': lm = L_L, p++; break; /* %ws */
+        case 'I':
+            if (p[1] == '6' && p[2] == '4') lm = L_LL, p += 3;
+            else if (p[1] == '3' && p[2] == '2') lm = L_NONE, p += 3;
+            else lm = sizeof(void *) == 8 ? L_LL : L_NONE, p++;
+            break;
+        }
+        c = *p;
+        if (!c) { /* incomplete: copy as is */
+            for (; *q; q++)
+                wput(o, *q);
+            break;
+        }
+        p++;
+
+        if (c == '%') {
+            wput(o, '%');
+            continue;
+        }
+        if (c == 'n') {
+            store_n(&ap, lm, o->len);
+            continue;
+        }
+        if (c == 'b' || c == 'B') {
+            uint64_t v = get_uint(&ap, lm);
+            char d[64];
+            int nd = 0, zeros, pre = 0, total;
+            while (v)
+                d[nd++] = (char)('0' + (v & 1)), v >>= 1;
+            if (prec < 0 && zero && !left)
+                ; /* zero padding below */
+            zeros = prec > nd ? prec - nd : 0;
+            if (prec < 0 && nd == 0)
+                zeros = 1;
+            if (alt && nd)
+                pre = 2;
+            total = pre + zeros + nd;
+            if (!left && !(zero && prec < 0))
+                wpad(o, ' ', width - total);
+            if (pre)
+                wput(o, '0'), wput(o, c);
+            if (!left && zero && prec < 0)
+                wpad(o, '0', width - total);
+            wpad(o, '0', zeros);
+            while (nd)
+                wput(o, d[--nd]);
+            if (left)
+                wpad(o, ' ', width - total);
+            continue;
+        }
+        if (c == 'c' || c == 's' || c == 'C' || c == 'S') {
+            int wide = (c == 'c' || c == 's') ? lm != L_H : lm == L_L;
+            int str = c == 's' || c == 'S';
+            wchar_t one;
+            const wchar_t *ws = 0;
+            const char *ns = 0;
+            size_t len = 0;
+            if (!str) {
+                int ch = va_arg(ap, int);
+                if (wide) {
+                    one = (wchar_t)ch, ws = &one, len = 1;
+                } else {
+                    char b = (char)ch;
+                    if (c23_mbr(&one, &b, 1, 0) > 1)
+                        one = (wchar_t)(unsigned char)b;
+                    ws = &one, len = 1;
+                }
+            } else if (wide) {
+                ws = va_arg(ap, const wchar_t *);
+                if (!ws)
+                    ws = L"(null)";
+                for (; (prec < 0 || (int)len < prec) && ws[len]; len++)
+                    ;
+            } else {
+                ns = va_arg(ap, const char *);
+                if (!ns)
+                    ns = "(null)";
+            }
+            if (ws) {
+                if (!left)
+                    wpad(o, ' ', width - (int)len);
+                for (k = 0; k < (int)len; k++)
+                    wput(o, ws[k]);
+                if (left)
+                    wpad(o, ' ', width - (int)len);
+            } else {
+                /* narrow string: convert, prec limits the bytes used */
+                int nchars = 0, i = 0;
+                size_t bytes = 0;
+                const char *t = ns;
+                while ((prec < 0 || (int)bytes < prec) && t[bytes])
+                    bytes++;
+                while (i < (int)bytes) {
+                    wchar_t w;
+                    size_t r = c23_mbr(&w, t + i, bytes - i, 0);
+                    if (r == (size_t)-1 || r == (size_t)-2 || r == 0)
+                        r = 1, w = (wchar_t)(unsigned char)t[i];
+                    i += (int)r, nchars++;
+                }
+                if (!left)
+                    wpad(o, ' ', width - nchars);
+                for (i = 0; i < (int)bytes;) {
+                    wchar_t w;
+                    size_t r = c23_mbr(&w, t + i, bytes - i, 0);
+                    if (r == (size_t)-1 || r == (size_t)-2 || r == 0)
+                        r = 1, w = (wchar_t)(unsigned char)t[i];
+                    wput(o, w);
+                    i += (int)r;
+                }
+                if (left)
+                    wpad(o, ' ', width - nchars);
+            }
+            continue;
+        }
+
+        /* numbers and pointers: format one conversion with the narrow engine */
+        sl = 0;
+        spec[sl++] = '%';
+        if (left) spec[sl++] = '-';
+        if (plus) spec[sl++] = '+';
+        if (space) spec[sl++] = ' ';
+        if (alt) spec[sl++] = '#';
+        if (zero) spec[sl++] = '0';
+        if (width >= 0)
+            sl += put_num(spec + sl, width);
+        if (prec >= 0) {
+            spec[sl++] = '.';
+            sl += put_num(spec + sl, prec);
+        }
+        s = sbuf;
+        switch (c) {
+        case 'd': case 'i': case 'u': case 'o': case 'x': case 'X': {
+            long long v = (c == 'd' || c == 'i') ? (long long)get_int(&ap, lm)
+                                                 : (long long)get_uint(&ap, lm);
+            spec[sl++] = 'l', spec[sl++] = 'l', spec[sl++] = (char)c, spec[sl] = 0;
+            slen = __tcc_snprintf(sbuf, sizeof sbuf, spec, v);
+            if (slen >= (int)sizeof sbuf) {
+                s = malloc(slen + 1);
+                if (!s) { va_end(ap); return -1; }
+                __tcc_snprintf(s, slen + 1, spec, v);
+            }
+            break;
+        }
+        case 'e': case 'E': case 'f': case 'F': case 'g': case 'G':
+        case 'a': case 'A': {
+            double d = lm == L_BIGL ? (double)va_arg(ap, long double)
+                                    : va_arg(ap, double);
+            spec[sl++] = (char)c, spec[sl] = 0;
+            slen = __tcc_snprintf(sbuf, sizeof sbuf, spec, d);
+            if (slen >= (int)sizeof sbuf) {
+                s = malloc(slen + 1);
+                if (!s) { va_end(ap); return -1; }
+                __tcc_snprintf(s, slen + 1, spec, d);
+            }
+            break;
+        }
+        case 'p': {
+            void *pv = va_arg(ap, void *);
+            spec[sl++] = 'p', spec[sl] = 0;
+            slen = __tcc_snprintf(sbuf, sizeof sbuf, spec, pv);
+            break;
+        }
+        default: /* unknown conversion: copy as is */
+            for (; q < p; q++)
+                wput(o, *q);
+            continue;
+        }
+        if (slen > 0)
+            wput_ascii(o, s, slen);
+        if (s != sbuf)
+            free(s);
+    }
+    va_end(ap);
+    if (o->n)
+        o->buf[o->len < o->n ? o->len : o->n - 1] = 0;
+    return o->len > 0x7fffffff ? -1 : (int)o->len;
+}
+
+/* C99 swprintf: n is the size in wide characters; negative if truncated */
+int __tcc_vswprintf(wchar_t *buf, size_t n, const wchar_t *fmt, va_list ap)
+{
+    wout_t o;
+    int r;
+    o.buf = buf, o.n = n, o.len = 0;
+    r = wformat(&o, fmt, ap);
+    return r < 0 || (size_t)r >= n ? -1 : r;
+}
+
+int __tcc_swprintf(wchar_t *buf, size_t n, const wchar_t *fmt, ...)
+{
+    va_list ap; int r;
+    va_start(ap, fmt); r = __tcc_vswprintf(buf, n, fmt, ap); va_end(ap);
+    return r;
+}
+
+int __tcc_vfwprintf(FILE_ *fp, const wchar_t *fmt, va_list ap)
+{
+    wchar_t sbuf[512], *s = sbuf;
+    wout_t o;
+    va_list ap2;
+    int r;
+    va_copy(ap2, ap);
+    o.buf = sbuf, o.n = 512, o.len = 0;
+    r = wformat(&o, fmt, ap);
+    if (r >= 512) {
+        s = malloc(((size_t)r + 1) * sizeof(wchar_t));
+        if (s) {
+            o.buf = s, o.n = (size_t)r + 1, o.len = 0;
+            wformat(&o, fmt, ap2);
+        } else {
+            r = -1;
+        }
+    }
+    va_end(ap2);
+    if (r > 0 && fputws(s, fp) < 0)
+        r = -1;
+    if (s != sbuf)
+        free(s);
+    return r;
+}
+
+int __tcc_fwprintf(FILE_ *fp, const wchar_t *fmt, ...)
+{
+    va_list ap; int r;
+    va_start(ap, fmt); r = __tcc_vfwprintf(fp, fmt, ap); va_end(ap);
+    return r;
+}
+
+int __tcc_vwprintf(const wchar_t *fmt, va_list ap)
+{
+    return __tcc_vfwprintf(STDOUT_, fmt, ap);
+}
+
+int __tcc_wprintf(const wchar_t *fmt, ...)
+{
+    va_list ap; int r;
+    va_start(ap, fmt); r = __tcc_vfwprintf(STDOUT_, fmt, ap); va_end(ap);
     return r;
 }

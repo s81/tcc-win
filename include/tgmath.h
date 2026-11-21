@@ -4,6 +4,9 @@
 
 #ifndef _TGMATH_H
 #define _TGMATH_H
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_TGMATH_H__ 202311L
+#endif
 
 #include <math.h>
 

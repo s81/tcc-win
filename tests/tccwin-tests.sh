@@ -15,8 +15,8 @@ fail=0
 
 check_ok() { # dir file [flags]
     if out=$(cd "$1" && $TCC $3 "$2" -o "$tmp/t.exe" 2>&1) && [ -z "$out" ]; then
-        if [ -n "$RUN" ] && ! "$tmp/t.exe" >"$tmp/out.txt" 2>&1; then
-            echo "FAIL (run) $2"; cat "$tmp/out.txt"; fail=1
+        if [ -n "$RUN" ] && { "$tmp/t.exe" >"$tmp/out.txt" 2>&1; rc=$?; [ $rc -ne 0 ]; }; then
+            echo "FAIL (run) $2 (exit code $rc)"; cat "$tmp/out.txt"; fail=1
         else
             echo "ok   $2"
         fi
@@ -28,6 +28,13 @@ check_ok() { # dir file [flags]
 check_ok "$top/tests/c23" c23_features.c -w  # uses [[deprecated]] entities
 check_ok "$top/tests/c23" c23_more.c -w
 check_ok "$top/tests/c23" c23_bitint.c
+check_ok "$top/tests/c23" c23_utf_literals.c -Wall
+check_ok "$top/tests/c23" c23_vla_init.c -Wall
+check_ok "$top/tests/c23" c23_lib_c99.c -Wall
+check_ok "$top/tests/c23" c23_version_macros.c -Wall
+check_ok "$top/tests/c23" c23_utf_macros.c -Wall
+check_ok "$top/tests/c23" c23_va_opt_paste.c -Wall
+check_ok "$top/tests/c23" c23_has_attr_scoped.c -Wall
 check_ok "$top/tests/c23" c23_constexpr.c
 check_ok "$top/tests/c23" c23_audit_fixes.c -Wall
 check_ok "$top/tests/c23" c23_runtime.c

@@ -620,10 +620,50 @@ extern wchar_t **_wenviron;
   int __cdecl strfromd(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,double _Fp);
   int __cdecl strfromf(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,float _Fp);
   int __cdecl strfroml(char *__restrict__ _S,size_t _N,const char *__restrict__ _Format,long double _Fp);
+  /* C23 7.24.1: once_flag, ONCE_FLAG_INIT and call_once are also in <stdlib.h> */
+#ifndef __TCC_ONCE_FLAG_DEFINED
+#define __TCC_ONCE_FLAG_DEFINED
+  typedef struct { volatile long __state; } once_flag;
+#define ONCE_FLAG_INIT { 0 }
+#endif
+  void __cdecl call_once(once_flag *_Flag,void (__cdecl *_Func)(void));
+  /* C23 7.24.4.1: 0b/0B accepted by the strto* functions (binary prefix) */
+  long __cdecl __tcc_strtol(const char *,char **,int);
+  unsigned long __cdecl __tcc_strtoul(const char *,char **,int);
+  long long __cdecl __tcc_strtoll(const char *,char **,int);
+  unsigned long long __cdecl __tcc_strtoull(const char *,char **,int);
+#ifndef __TCC_MSVCRT_STRTO
+#undef strtoll
+#undef strtoull
+#define strtol __tcc_strtol
+#define strtoul __tcc_strtoul
+#define strtoll __tcc_strtoll
+#define strtoull __tcc_strtoull
+#endif
+#endif
+
+/* C11/C23 7.24.4.7: quick_exit; in libtcc1.a */
+#if __STDC_VERSION__ >= 201112L
+  void __cdecl quick_exit(int _Code) __MINGW_ATTRIB_NORETURN;
+  int __cdecl at_quick_exit(void (__cdecl *_Func)(void));
 #endif
 
 #ifdef __cplusplus
 }
+#endif
+
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_STDLIB_H__ 202311L
+#ifndef __cplusplus
+/* C23 7.24.3.2: bsearch returns pointer to const void when the array is const */
+#ifndef __TCC_QUAL_PTR
+#define __TCC_QUAL_PTR(p) (1 ? (p) : (void *)1)
+#endif
+#define bsearch(k, b, n, z, f) _Generic(__TCC_QUAL_PTR(b), \
+    const void *: (const void *)(bsearch)((k), (b), (n), (z), (f)), \
+    const volatile void *: (const volatile void *)(bsearch)((k), (b), (n), (z), (f)), \
+    default: (bsearch)((k), (b), (n), (z), (f)))
+#endif
 #endif
 
 #pragma pack(pop)

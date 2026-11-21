@@ -10,6 +10,12 @@
               fminimum_num, fmaximum_mag, fminimum_mag, fmaximum_mag_num,
               fminimum_mag_num (each also with f and l suffix)
 
+   C99/C11 functions msvcrt.dll lacks:
+   <stdlib.h> lldiv, quick_exit, at_quick_exit, call_once (C23)
+   <inttypes.h> imaxdiv
+   <ctype.h>/<wctype.h> isblank, iswblank
+   <time.h>   TIME_MONOTONIC base of timespec_get (C23)
+
    long double is double on these targets, so the l variants call the
    double ones.  The math and string parts use no Windows API and can be
    tested natively (build without _WIN32). */
@@ -631,6 +637,117 @@ long double fmaximum_mag_numl(long double x, long double y) { return fmaximum_ma
 long double fminimum_mag_numl(long double x, long double y) { return fminimum_mag_num(x, y); }
 
 /* ------------------------------------------------------------------ */
+/* C99 integer division, <ctype.h> */
+
+typedef struct { long long quot, rem; } c23_lldiv_t;
+
+c23_lldiv_t lldiv(long long n, long long d)
+{
+    c23_lldiv_t r;
+    r.quot = n / d;
+    r.rem = n % d;
+    return r;
+}
+
+c23_lldiv_t imaxdiv(long long n, long long d)
+{
+    return lldiv(n, d);
+}
+
+#ifdef _WIN32
+__declspec(dllimport) int _isctype(int, int);
+__declspec(dllimport) int iswctype(unsigned short, unsigned short);
+__declspec(dllimport) void __cdecl _exit(int);
+#define Exit_(c) _exit(c)
+#define BLANK_ 0x40
+#else
+void _Exit(int);
+#define Exit_(c) _Exit(c)
+#define BLANK_ 0
+#define _isctype(c, t) 0
+#define iswctype(c, t) 0
+#endif
+
+int isblank(int c)
+{
+    return c == ' ' || c == '\t' || (c >= 128 && c < 256 && _isctype(c, BLANK_));
+}
+
+int iswblank(unsigned c)
+{
+    return c == ' ' || c == '\t' || (c >= 128 && iswctype(c, BLANK_));
+}
+
+/* ------------------------------------------------------------------ */
+/* <stdlib.h>: quick_exit, at_quick_exit, call_once */
+
+#define QUICK_EXIT_MAX 32
+static void (*quick_exit_fn[QUICK_EXIT_MAX])(void);
+static int quick_exit_n;
+
+int at_quick_exit(void (*fn)(void))
+{
+    if (quick_exit_n >= QUICK_EXIT_MAX)
+        return 1;
+    quick_exit_fn[quick_exit_n++] = fn;
+    return 0;
+}
+
+void quick_exit(int code)
+{
+    while (quick_exit_n > 0)
+        quick_exit_fn[--quick_exit_n]();
+    Exit_(code);
+}
+
+#ifdef _WIN32
+/* tcc's atomic builtins (libtcc1's stdatomic.c/atomic.S): no kernel32 import
+   needed, and every Windows target has them */
+#include <stdatomic.h>
+__declspec(dllimport) void __stdcall Sleep(unsigned long);
+#define CAS_(p, n, o) cas_win(p, n, o)
+static long cas_win(volatile long *p, long n, long o)
+{
+    int exp = (int)o;
+    atomic_compare_exchange_strong((volatile atomic_int *)p, &exp, (int)n);
+    return exp;
+}
+#define XCHG_(p, v) atomic_store((volatile atomic_int *)(p), (int)(v))
+#define YIELD_() Sleep(0)
+#else
+/* host build, for tests only: not thread safe */
+static long cas_host(volatile long *p, long n, long o)
+{
+    long v = *p;
+    if (v == o)
+        *p = n;
+    return v;
+}
+#define CAS_(p, n, o) cas_host(p, n, o)
+#define XCHG_(p, v) (*(p) = (v))
+#define YIELD_() ((void)0)
+#endif
+
+/* state: 0 not run, 1 running, 2 done.  Concurrent callers wait for the
+   first one to finish.  (No unwinding if func exits abnormally.) */
+typedef struct { volatile long state; } c23_once_flag; /* 32-bit on Windows */
+
+void call_once(c23_once_flag *flag, void (*func)(void))
+{
+    for (;;) {
+        long s = CAS_(&flag->state, 1, 0);
+        if (s == 2)
+            return;
+        if (s == 0) {
+            func();
+            XCHG_(&flag->state, 2);
+            return;
+        }
+        YIELD_();
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* <time.h> */
 
 #ifdef _WIN32
@@ -668,12 +785,28 @@ time_t timegm(struct tm *tm)
     return t;
 }
 
+__declspec(dllimport) int __stdcall QueryPerformanceCounter(long long *);
+__declspec(dllimport) int __stdcall QueryPerformanceFrequency(long long *);
+
+/* C23 TIME_MONOTONIC: QueryPerformanceCounter, from an arbitrary origin */
+static int get_monotonic(struct timespec *ts)
+{
+    long long c, f;
+    if (!QueryPerformanceFrequency(&f) || !QueryPerformanceCounter(&c) || f <= 0)
+        return 0;
+    ts->tv_sec = (time_t)(c / f);
+    ts->tv_nsec = (long)((c % f) * 1000000000LL / f);
+    return 2;
+}
+
 int timespec_get(struct timespec *ts, int base)
 {
     static void (__stdcall *get)(c23_filetime *);
     c23_filetime ft;
     uint64_t v;
 
+    if (base == 2 /* TIME_MONOTONIC */)
+        return get_monotonic(ts);
     if (base != 1 /* TIME_UTC */)
         return 0;
     if (!get) {
@@ -691,6 +824,16 @@ int timespec_get(struct timespec *ts, int base)
 
 int timespec_getres(struct timespec *ts, int base)
 {
+    if (base == 2 /* TIME_MONOTONIC */) {
+        long long f;
+        if (!QueryPerformanceFrequency(&f) || f <= 0)
+            return 0;
+        if (ts) {
+            ts->tv_sec = 0;
+            ts->tv_nsec = (long)((1000000000LL + f - 1) / f);
+        }
+        return 2;
+    }
     if (base != 1 /* TIME_UTC */)
         return 0;
     if (ts) {
