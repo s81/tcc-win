@@ -5776,6 +5776,18 @@ static void own_call_borrow(struct own_var *src, int kind)
     }
 }
 
+/* an argument was parsed: if its value is the result of an [[owner]] call
+   ('strlen(strdup(s))'), the parameter must take ownership, else the
+   resource is lost.  A cast ('f((char *)malloc(n))') hides it. */
+static void own_res_arg(Sym *sa)
+{
+    if (own_res_call && !nocode_wanted && !(sa && sa->a.owner))
+        own_err(NULL, "result of '%s' is an owner and is passed to a parameter"
+            " that does not take ownership (leak): keep it in an [[owner]] variable",
+            get_tok_str(own_res_call, NULL));
+    own_res_call = 0;
+}
+
 /* argument for parameter 'sa' whose value is the plain name of 'mv' */
 static void own_arg(Sym *sa, struct own_var *mv)
 {
@@ -8829,8 +8841,10 @@ special_math_val:
                         own_noesc = sa && sa->a.borrow == OWN_SHARED ? mv : NULL;
                         if (mv && sa->a.owner)
                             own_kids_check(mv, own_void_param(sa));
+                        own_res_call = 0;
                         expr_eq();
                         own_lending = NULL, own_noesc = NULL;
+                        own_res_arg(sa);
                         gfunc_param_typed(s, sa);
                         own_arg(sa, mv);
                         if (!sa || sa->a.borrow != OWN_SHARED)
@@ -8863,8 +8877,10 @@ special_math_val:
                         own_noesc = sa && sa->a.borrow == OWN_SHARED ? mv : NULL;
                         if (mv && sa->a.owner)
                             own_kids_check(mv, own_void_param(sa));
+                        own_res_call = 0;
                         expr_eq();
                         own_lending = NULL, own_noesc = NULL;
+                        own_res_arg(sa);
                         gfunc_param_typed(s, sa);
                         own_arg(sa, mv);
                         if (!sa || sa->a.borrow != OWN_SHARED)
