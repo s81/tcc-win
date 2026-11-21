@@ -36,6 +36,7 @@ int main(void)
 void release([[owner]] char *p);          // function takes ownership
 size_t len([[borrow]] const char *s);     // function borrows for the call
 void edit([[borrow_mut]] char *s);        // function borrows mutably for the call
+void *grow([[tcc::realloc]] void *p, size_t n); // takes p only if non-null is returned
 [[owner]] char *make(void);               // documents the result (not checked at the caller)
 ```
 
@@ -95,6 +96,40 @@ void list_free([[owner]] struct node *n)
     }                       // n is null here: no leak
 }
 ```
+
+## Reallocation
+
+A parameter declared `[[tcc::realloc]]` (GNU spelling
+`__attribute__((realloc))`) is an owner parameter that is taken **only if
+the function returns non-null**, like the pointer passed to `realloc`. In the
+Windows headers, `realloc`, `_recalloc` and the `_aligned_*realloc` and
+`_aligned_*recalloc` functions are declared this way.
+
+```c
+p = realloc(p, n);                  // ok: p is moved, then gets the result
+
+[[owner]] char *q = realloc(p, n);  // p is moved ...
+if (!q) {
+    free(p);                        // ... but given back where q is null
+    return -1;
+}
+p = q;                              // ok: p was moved
+```
+
+When the result of such a call is the whole initializer or right-hand side
+of an owner `q` (a cast is allowed: `q = (char *)realloc(p, n)`), a null test
+of `q` (see *Null* above) gives `p` back its state from before the call, in
+the branch where `q` is null. Everywhere else `p` stays moved, so a missing
+`free(p)` on the failure path is a leak and a use of `p` after a successful
+call is a use after move. If the result is used in any other way
+(`f(realloc(p, n))`, `realloc(p, n) + 1`), `p` is moved as by `[[owner]]`.
+
+The overwrite check of an assignment is made after its right-hand side, so
+`p = realloc(p, n)` and `p = f(p)` (for any `[[owner]]` parameter) are
+accepted. In `p = realloc(p, n)` the old block is lost when `realloc`
+fails, as in any C code that does so; the checker does not report it.
+`realloc(p, 0)` may release `p` and return null (implementation-defined; C23
+makes it undefined), so do not reallocate to size 0.
 
 ## Borrows
 
