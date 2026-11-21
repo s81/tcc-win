@@ -742,7 +742,7 @@ extern FILE (*_imp___iob)[];	/* A pointer to an array of FILE */
 
 #ifndef _WSTRING_DEFINED
 #define _WSTRING_DEFINED
-  _CRTIMP wchar_t *__cdecl _wcsdup(const wchar_t *_Str);
+  _CRTIMP __attribute__((owner)) wchar_t *__cdecl _wcsdup(const wchar_t *_Str);
   wchar_t *__cdecl wcscat(wchar_t *_Dest,const wchar_t *_Source);
   _CONST_RETURN wchar_t *__cdecl wcschr(const wchar_t *_Str,wchar_t _Ch);
   int __cdecl wcscmp(const wchar_t *_Str1,const wchar_t *_Str2);
@@ -792,7 +792,7 @@ extern FILE (*_imp___iob)[];	/* A pointer to an array of FILE */
   _CRTIMP int __cdecl _wcsnicoll_l(const wchar_t *_Str1,const wchar_t *_Str2,size_t _MaxCount,_locale_t _Locale);
 
 #ifndef	NO_OLDNAMES
-  wchar_t *__cdecl wcsdup(const wchar_t *_Str);
+  __attribute__((owner)) wchar_t *__cdecl wcsdup(const wchar_t *_Str);
 #define wcswcs wcsstr
   int __cdecl wcsicmp(const wchar_t *_Str1,const wchar_t *_Str2);
   int __cdecl wcsnicmp(const wchar_t *_Str1,const wchar_t *_Str2,size_t _MaxCount);

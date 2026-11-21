@@ -37,7 +37,7 @@ void release([[owner]] char *p);          // function takes ownership
 size_t len([[borrow]] const char *s);     // function borrows for the call
 void edit([[borrow_mut]] char *s);        // function borrows mutably for the call
 void *grow([[tcc::realloc]] void *p, size_t n); // takes p only if non-null is returned
-[[owner]] char *make(void);               // documents the result (not checked at the caller)
+[[owner]] char *make(void);               // the result must be kept (see below)
 ```
 
 Each attribute can also be written with the vendor prefix (`[[tcc::owner]]`,
@@ -130,6 +130,23 @@ accepted. In `p = realloc(p, n)` the old block is lost when `realloc`
 fails, as in any C code that does so; the checker does not report it.
 `realloc(p, 0)` may release `p` and return null (implementation-defined; C23
 makes it undefined), so do not reallocate to size 0.
+
+## Owner results
+
+A function declared `[[owner]]` returns a resource that the caller must
+keep. Calling it as a statement and discarding the result is reported as a
+warning (not an error, because plain C code that does not use ownership gets
+it too; `-Werror` makes it one, `-w` or a cast to `void` silences it):
+
+```
+f.c:5: warning: result of 'malloc' is an owner and is discarded (leak): release or keep it
+```
+
+In the Windows headers, `malloc`, `calloc`, `realloc`, `aligned_alloc`,
+`strdup`, `strndup`, `wcsdup` and the msvcrt variants (`_strdup`, `_wcsdup`,
+`_recalloc`, `_aligned_malloc`, `_aligned_realloc` ...) are declared
+`[[owner]]`. The result is not otherwise tracked at the caller: assign it to
+an `[[owner]]` variable to check it.
 
 ## Borrows
 
@@ -535,7 +552,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
-- Return values of `[[owner]]` functions may be discarded silently.
+- A discarded `[[owner]]` result is only detected in an expression
+  statement (`make();`); `strlen(strdup(s))` and other uses that drop it are
+  not reported.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
   and array element counts as one).

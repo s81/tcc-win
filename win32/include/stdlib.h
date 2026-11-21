@@ -419,7 +419,7 @@ extern wchar_t **_wenviron;
 
 #ifndef _CRT_ALLOCATION_DEFINED
 #define _CRT_ALLOCATION_DEFINED
-  void *__cdecl calloc(size_t _NumOfElements,size_t _SizeOfElements);
+  __attribute__((owner)) void *__cdecl calloc(size_t _NumOfElements,size_t _SizeOfElements);
   /* tcc-win: free() takes ownership of its argument (see docs/OWNERSHIP.md) */
 #if defined(__TCC_BCHECK__) && !defined(__TCC_MSVCRT_FREE)
   /* -b: the bounds checker hooks free/realloc itself, so they must not be
@@ -431,20 +431,20 @@ extern wchar_t **_wenviron;
      to wrappers in libtcc1.a (lib/c23rt.c, docs/C23-STATUS.md).
      -D__TCC_MSVCRT_FREE opts out (and then aligned_alloc is not declared). */
   void __cdecl free(__attribute__((owner)) void *_Memory) __asm__("__tcc_free");
-  void *__cdecl realloc(__attribute__((realloc)) void *_Memory,size_t _NewSize) __asm__("__tcc_realloc");
+  __attribute__((owner)) void *__cdecl realloc(__attribute__((realloc)) void *_Memory,size_t _NewSize) __asm__("__tcc_realloc");
 #else
   void __cdecl free(__attribute__((owner)) void *_Memory);
-  void *__cdecl realloc(__attribute__((realloc)) void *_Memory,size_t _NewSize);
+  __attribute__((owner)) void *__cdecl realloc(__attribute__((realloc)) void *_Memory,size_t _NewSize);
 #endif
-  void *__cdecl malloc(size_t _Size);
-  _CRTIMP void *__cdecl _recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size);
+  __attribute__((owner)) void *__cdecl malloc(size_t _Size);
+  _CRTIMP __attribute__((owner)) void *__cdecl _recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size);
   _CRTIMP void __cdecl _aligned_free(void *_Memory);
-  _CRTIMP void *__cdecl _aligned_malloc(size_t _Size,size_t _Alignment);
-  _CRTIMP void *__cdecl _aligned_offset_malloc(size_t _Size,size_t _Alignment,size_t _Offset);
-  _CRTIMP void *__cdecl _aligned_realloc(__attribute__((realloc)) void *_Memory,size_t _Size,size_t _Alignment);
-  _CRTIMP void *__cdecl _aligned_recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size,size_t _Alignment);
-  _CRTIMP void *__cdecl _aligned_offset_realloc(__attribute__((realloc)) void *_Memory,size_t _Size,size_t _Alignment,size_t _Offset);
-  _CRTIMP void *__cdecl _aligned_offset_recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size,size_t _Alignment,size_t _Offset);
+  _CRTIMP __attribute__((owner)) void *__cdecl _aligned_malloc(size_t _Size,size_t _Alignment);
+  _CRTIMP __attribute__((owner)) void *__cdecl _aligned_offset_malloc(size_t _Size,size_t _Alignment,size_t _Offset);
+  _CRTIMP __attribute__((owner)) void *__cdecl _aligned_realloc(__attribute__((realloc)) void *_Memory,size_t _Size,size_t _Alignment);
+  _CRTIMP __attribute__((owner)) void *__cdecl _aligned_recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size,size_t _Alignment);
+  _CRTIMP __attribute__((owner)) void *__cdecl _aligned_offset_realloc(__attribute__((realloc)) void *_Memory,size_t _Size,size_t _Alignment,size_t _Offset);
+  _CRTIMP __attribute__((owner)) void *__cdecl _aligned_offset_recalloc(__attribute__((realloc)) void *_Memory,size_t _Count,size_t _Size,size_t _Alignment,size_t _Offset);
 #endif
 
 #ifndef _WSTDLIB_DEFINED
@@ -612,7 +612,7 @@ extern wchar_t **_wenviron;
   /* C23, in libtcc1.a */
 #ifndef __TCC_MSVCRT_FREE
   /* blocks are released by free/realloc above (not by _aligned_free) */
-  void *__cdecl aligned_alloc(size_t _Alignment,size_t _Size);
+  __attribute__((owner)) void *__cdecl aligned_alloc(size_t _Alignment,size_t _Size);
   void __cdecl free_sized(__attribute__((owner)) void *_Ptr,size_t _Size);
   void __cdecl free_aligned_sized(__attribute__((owner)) void *_Ptr,size_t _Alignment,size_t _Size);
 #endif

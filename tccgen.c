@@ -1221,6 +1221,8 @@ static void depr_warn(Sym *sym)
 /* result of the last call was a [[nodiscard]] one (cleared by any
    operation that uses the value); used for expression statements */
 static int nd_call;
+/* same for a call whose result is an [[owner]]: discarding it is a leak */
+static int own_res_call;
 
 /* Merge symbol attributes.  */
 static void merge_symattr(struct SymAttr *sa, struct SymAttr *sa1)
@@ -3287,7 +3289,7 @@ ST_FUNC void gen_op(int op)
     CType type1, combtype;
     int op_class = op;
 
-    nd_call = 0;
+    nd_call = own_res_call = 0;
     if (((vtop[-1].type.t | vtop[0].type.t) & VT_BITINT) && gen_op_bitint(op))
         return;
 
@@ -3526,7 +3528,7 @@ static void gen_cast(CType *type)
     int sbt, dbt, sf, df, c;
     int dbt_bt, sbt_bt, ds, ss, bits, trunc;
 
-    nd_call = 0;
+    nd_call = own_res_call = 0;
     if (((type->t | vtop->type.t) & VT_BITINT) && gen_cast_bitint(type))
         return;
 
@@ -3995,7 +3997,7 @@ ST_FUNC void vstore(void)
 {
     int sbt, dbt, ft, r, size, align, bit_size, bit_pos, delayed_cast;
 
-    nd_call = 0;
+    nd_call = own_res_call = 0;
     ft = vtop[-1].type.t;
     sbt = vtop->type.t & VT_BTYPE;
     dbt = ft & VT_BTYPE;
@@ -7953,7 +7955,7 @@ ST_FUNC void unary(void)
     if (debug_modes)
         tcc_debug_line(tcc_state), tcc_tcov_check_line (tcc_state, 1);
 
-    nd_call = 0;
+    nd_call = own_res_call = 0;
     type.ref = NULL;
     /* XXX: GCC 2.95.3 does not generate a table although it should be
        better here */
@@ -8922,6 +8924,8 @@ special_math_val:
             {
                 int bt = s->type.t & VT_BTYPE;
                 nd_call = 0;
+                own_res_call = callee && callee->a.owner && !nocode_wanted
+                    ? callee->v : 0;
                 if (s->f.func_nodiscard
                     || (s->type.ref && (bt == VT_STRUCT || IS_ENUM(s->type.t))
                         && s->type.ref->a.nodiscard))
@@ -10170,12 +10174,15 @@ again:
                     vpop();
                     gexpr();
                 } else {
-                    nd_call = 0;
+                    nd_call = own_res_call = 0;
                     gexpr();
                     if (nd_call)
                         tcc_warning("ignoring return value of '%s' declared with attribute 'nodiscard'",
                             nd_call > 0 ? get_tok_str(nd_call, NULL) : "function");
-                    nd_call = 0;
+                    if (own_res_call) /* a warning: plain C code gets it too */
+                        tcc_warning("result of '%s' is an owner and is discarded (leak):"
+                            " release or keep it", get_tok_str(own_res_call, NULL));
+                    nd_call = own_res_call = 0;
                     vpop();
                 }
                 skip(';');
