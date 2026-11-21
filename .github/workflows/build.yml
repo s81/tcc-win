@@ -138,3 +138,25 @@ jobs:
     - name: C23 + ownership tests with the stage 3 compiler (compile, link and run)
       shell: bash
       run: TCC="$PWD/win32/tcc.exe" RUN=1 sh tests/tccwin-tests.sh
+
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+    - name: build (native arm64 Linux)
+      run: ./configure && make
+    - name: thread-local variables, also under -run
+      run: make -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
+
+  linux-i386:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+    - name: install the 32-bit toolchain
+      run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+    - name: build (32-bit x86 Linux; setarch makes uname report i686)
+      run: setarch i386 sh -c './configure --cc="gcc -m32" && make'
+    - name: thread-local variables, also under -run
+      run: setarch i386 make -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
