@@ -16,7 +16,8 @@ C17. It is not exhaustive: optional features (decimal floating point
 |---|---|
 | `nullptr`, `nullptr_t` | `nullptr_t` in `<stddef.h>` |
 | `constexpr` | scalars; members and elements of structs, unions and arrays |
-| `auto` type inference, `typeof`, `typeof_unqual` | |
+| `auto` type inference, `typeof`, `typeof_unqual` | also with an unnamed struct or union (`auto q = (struct {int a;}){1};`) |
+| Non-ASCII letters in identifiers | UTF-8 in source. Symbols, punctuation, spaces, emoji and private-use characters are rejected ("character U+XXXX is not allowed in an identifier"). tcc has no Unicode property tables, so this is a list of ranges that are certainly not `XID_Start`/`XID_Continue`; some non-identifier characters are still accepted. `\uXXXX` escapes in identifiers are not supported |
 | `bool`, `true`, `false`, `alignas`, `alignof`, `static_assert`, `thread_local` as keywords | `true`/`false` have type `bool` |
 | `static_assert` without a message | |
 | `[[deprecated]]`, `[[fallthrough]]`, `[[maybe_unused]]`, `[[nodiscard]]`, `[[noreturn]]`, `[[unsequenced]]`, `[[reproducible]]` | also `[[__name__]]` spellings, `__has_c_attribute`; `nodiscard` and `deprecated("msg")` give warnings (default on, `-w` silences) |
@@ -45,7 +46,7 @@ C17. It is not exhaustive: optional features (decimal floating point
 | `assert(...)` is variadic | commas, e.g. in compound literals, are allowed |
 | `INFINITY`, `NAN`, `*_IS_IEC_60559`, `*_NORM_MAX` in `<float.h>` | |
 | `FLT_SNAN`, `DBL_SNAN`, `LDBL_SNAN` in `<float.h>` | constant expressions from the builtins `__builtin_nans`, `__builtin_nansf`, `__builtin_nansl` (also `__builtin_nan*`, `__builtin_inf*`) |
-| `__STDC_VERSION_*_H__` = `202311L` | `<assert.h>`, `<fenv.h>`, `<float.h>`, `<inttypes.h>`, `<limits.h>`, `<math.h>`, `<setjmp.h>`, `<stdarg.h>`, `<stdatomic.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>`, `<stdlib.h>`, `<string.h>`, `<tgmath.h>`, `<time.h>` (the Windows-only ones on Windows targets) |
+| `__STDC_VERSION_*_H__` = `202311L` | `<assert.h>`, `<fenv.h>`, `<float.h>`, `<inttypes.h>`, `<limits.h>`, `<math.h>`, `<setjmp.h>`, `<stdarg.h>`, `<stdatomic.h>`, `<stdbit.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<tgmath.h>`, `<time.h>`, `<uchar.h>`, `<wchar.h>` (the Windows-only ones on Windows targets) |
 | `FLT_TRUE_MIN`, `DBL_TRUE_MIN`, `LDBL_TRUE_MIN`, `*_DECIMAL_DIG`, `*_HAS_SUBNORM` in `<float.h>` | on Windows targets `LDBL_*` now describe the 53-bit `long double` that those targets really have (they described the x87 type before) |
 
 ## Language: gaps
@@ -58,7 +59,7 @@ threads and `_BitInt(N)` with N > 64 are optional or infeasible (see above).
 
 | Gap | Observed |
 |---|---|
-| `__STDC_VERSION_*_H__` of `<stdio.h>`, `<uchar.h>`, `<wchar.h>`, `<complex.h>` | not defined: not audited against the standard's list |
+| `__STDC_VERSION_COMPLEX_H__` | not defined: `<complex.h>` is absent (optional feature) |
 | `<complex.h>`, `<threads.h>` | absent: the features are optional (`__STDC_NO_COMPLEX__`, `__STDC_NO_THREADS__` are defined) |
 
 ## Library: supported
@@ -97,7 +98,7 @@ tests/tccwin-tests.sh`) and, on the build host, `tests/c99rt-host.sh`.
 | `feclearexcept`, `fegetexceptflag`, `feraiseexcept`, `fesetexceptflag`, `fetestexcept`, `fegetround`, `fesetround`, `fegetenv`, `feholdexcept`, `fesetenv`, `feupdateenv`; C23 `fetestexceptflag`, `fegetmode`, `fesetmode`, `femode_t`, `FE_DFL_MODE` | `<fenv.h>` | `lib/c99fenv.c`: x87 control/status words and MXCSR together. `feraiseexcept` sets the status flags and does not trap. x86 and x86_64 only: on arm64-win32 the functions are not provided (tcc's arm64 assembler cannot read FPCR/FPSR) |
 | `strtoimax`, `strtoumax`, `wcstoimax`, `wcstoumax`, `wcstoll`, `wcstoull`, `imaxdiv`, `lldiv` | `<inttypes.h>`, `<wchar.h>`, `<stdlib.h>` | declared before but missing from msvcrt |
 | `wcstof`, `wcstold` | `<wchar.h>` | `wcstod` converted to the type (like `strtof`/`strtold`, so `wcstof` rounds twice) |
-| `isblank`, `iswblank` | `<ctype.h>`, `<wctype.h>` | |
+| `isblank`, `iswblank` | `<ctype.h>`, `<wctype.h>`, `<wchar.h>` | declared by each of those headers, in any include order |
 | `quick_exit`, `at_quick_exit` (C11), `call_once`, `once_flag`, `ONCE_FLAG_INIT` (C23 moved them to `<stdlib.h>`) | `<stdlib.h>` | 32 handlers; `call_once` waits for a concurrent first call with `SwitchToThread` |
 | `TIME_MONOTONIC` base of `timespec_get`, `timespec_getres` | `<time.h>` | `QueryPerformanceCounter`; `TIME_ACTIVE` and `TIME_THREAD_ACTIVE` are not provided |
 | `strtol`, `strtoul`, `strtoll`, `strtoull`, `wcstol`, `wcstoul`, `wcstoll`, `wcstoull`, `strtoimax`, ... accept the C23 binary prefix `0b`/`0B` (base 0 or 2) | `<stdlib.h>`, `<wchar.h>`, `<inttypes.h>` | C23 mode maps them to `__tcc_` versions (`lib/c23strto.c`); `-D__TCC_MSVCRT_STRTO` opts out. Without C23 mode the plain names keep the C17 meaning |

@@ -7,6 +7,10 @@
 #ifndef _INC_UCHAR
 #define _INC_UCHAR
 
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_UCHAR_H__ 202311L
+#endif
+
 /*
  * The following defines are only valid when C11 (-std=c11) is used.
  *

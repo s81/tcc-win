@@ -10757,6 +10757,11 @@ static int str_widen(CString *dst, const char *src, int size, int es)
     return n;
 }
 
+/* C23 'auto' with an unnamed struct/union type: the initializer is parsed
+   twice, and the second parse declares a new unnamed type, which is the
+   same type as the one inferred from the first */
+static Sym *auto_anon;
+
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags)
 {
     int len, n, no_oblock, i;
@@ -10971,7 +10976,11 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
         /* Use i_c_parameter_t, to strip toplevel qualifiers.
            The source type might have VT_CONSTANT set, which is
            of course assignable to non-const elements.  */
-            && is_compatible_unqualified_types(type, &vtop->type)) {
+            && (is_compatible_unqualified_types(type, &vtop->type)
+                || (auto_anon && type->ref == auto_anon
+                    && (vtop->type.t & VT_BTYPE) == (type->t & VT_BTYPE)
+                    && vtop->type.ref->v >= SYM_FIRST_ANOM
+                    && (vtop->type.ref = auto_anon)))) {
         goto one_elem;
 
     } else if ((type->t & VT_BTYPE) == VT_STRUCT) {
@@ -11678,6 +11687,7 @@ static int decl(int l)
             type_decl(&type, &ad, &v, l == VT_CMP ? TYPE_DIRECT | TYPE_PARAM : TYPE_DIRECT);
             /*ptype("decl", &type, v);*/
             auto_str = NULL;
+            auto_anon = NULL;
             if (c23 && tok == '=' && v && l != VT_CMP) {
                 if ((c23 & 2) && (type.t & (VT_BTYPE|VT_ARRAY)) == VT_INT) {
                     /* C23 type inference: 'auto x = expr;' */
@@ -11698,6 +11708,9 @@ static int decl(int l)
                     ti.t &= ~(VT_STORAGE | VT_DEFSIGN);
                     type.ref = ti.ref;
                     type.t = ti.t | (type.t & (VT_STORAGE | VT_CONSTANT | VT_VOLATILE));
+                    if ((ti.t & VT_BTYPE) == VT_STRUCT && !(ti.t & VT_ARRAY)
+                        && ti.ref->v >= SYM_FIRST_ANOM)
+                        auto_anon = ti.ref;
                     /* parse the initializer again, for real */
                     macro_ptr = auto_str->str;
                     next();
