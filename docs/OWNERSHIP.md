@@ -37,7 +37,7 @@ void release([[owner]] char *p);          // function takes ownership
 size_t len([[borrow]] const char *s);     // function borrows for the call
 void edit([[borrow_mut]] char *s);        // function borrows mutably for the call
 void *grow([[tcc::realloc]] void *p, size_t n); // takes p only if non-null is returned
-[[owner]] char *make(void);               // documents the result (not checked at the caller)
+[[owner]] char *make(void);               // the result must be kept (see below)
 ```
 
 Each attribute can also be written with the vendor prefix (`[[tcc::owner]]`,
@@ -130,6 +130,26 @@ accepted. In `p = realloc(p, n)` the old block is lost when `realloc`
 fails, as in any C code that does so; the checker does not report it.
 `realloc(p, 0)` may release `p` and return null (implementation-defined; C23
 makes it undefined), so do not reallocate to size 0.
+
+## Owner results
+
+A function declared `[[owner]]` returns a resource that the caller must
+keep. Calling it as a statement and discarding the result is an error, like
+the other ownership errors (all of them are reported, then compilation
+fails). This applies to all code, also code that does not use `[[owner]]`
+itself, since `malloc` and the other allocation functions below are declared
+`[[owner]]`. A cast to `void` (`(void)malloc(n);`) marks an intended discard
+and is accepted.
+
+```
+f.c:5: error: result of 'malloc' is an owner and is discarded (leak): release or keep it, or cast it to void
+```
+
+In the Windows headers, `malloc`, `calloc`, `realloc`, `aligned_alloc`,
+`strdup`, `strndup`, `wcsdup` and the msvcrt variants (`_strdup`, `_wcsdup`,
+`_recalloc`, `_aligned_malloc`, `_aligned_realloc` ...) are declared
+`[[owner]]`. The result is not otherwise tracked at the caller: assign it to
+an `[[owner]]` variable to check it.
 
 ## Borrows
 
@@ -236,6 +256,7 @@ line of the last one in the source is given.
 | `cannot pass 'p' as mutable borrow while it is borrowed by 'v'` | conflicting borrow at a call |
 | `cannot pass shared borrow 's' as mutable borrow` | shared borrows are read-only |
 | `'a' and 'b' are passed to the same call and one of them is a mutable borrow (aliasing)` | two arguments refer to the same object |
+| `result of 'f' is an owner and is discarded (leak)` | an `[[owner]]` result (e.g. `malloc(n);`) is thrown away |
 | `cannot move out of borrow 'v'` | a borrow does not own the resource |
 | `cannot return borrow 'v' of local owner 'p'` | the result would dangle |
 | `'q' does not live long enough: it is still borrowed by 'v'` | the borrow is used after the owner `q` went out of scope |
@@ -535,7 +556,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
-- Return values of `[[owner]]` functions may be discarded silently.
+- A discarded `[[owner]]` result is only detected in an expression
+  statement (`make();`); `strlen(strdup(s))` and other uses that drop it are
+  not reported.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
   and array element counts as one).

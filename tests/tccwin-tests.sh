@@ -61,6 +61,19 @@ if [ "$(echo "$out" | sed 's/^[^:]*:\([0-9]*:\)/\1/')" = "$want" ] \
 else
     echo "FAIL warn_attrs.c: got: $out"; fail=1
 fi
+# an [[owner]] result that is discarded is a leak: an error for each call,
+# compilation goes on; '(void)' silences it
+out=$(cd "$top/tests/ownership" && $TCC -c err_discard.c -o "$tmp/t.o" 2>&1); rc=$?
+m="is an owner and is discarded (leak): release or keep it, or cast it to void"
+want="7: error: result of 'malloc' $m
+8: error: result of 'strdup' $m
+9: error: result of 'make' $m
+10: error: result of 'realloc' $m"
+if [ $rc -ne 0 ] && [ "$(echo "$out" | sed 's/^[^:]*:\([0-9]*:\)/\1/')" = "$want" ]; then
+    echo "ok   err_discard.c (discarded owner results)"
+else
+    echo "FAIL err_discard.c: got: $out"; fail=1
+fi
 for f in "$top"/tests/ownership/ok_*.c; do
     check_ok "$top/tests/ownership" "$(basename "$f")"
 done

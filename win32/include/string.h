@@ -50,7 +50,7 @@ extern "C" {
   size_t __cdecl strnlen(const char *_Str,size_t _MaxCount);
 #endif
   void *__cdecl memmove(void *_Dst,const void *_Src,size_t _Size);
-  _CRTIMP char *__cdecl _strdup(const char *_Src);
+  _CRTIMP __attribute__((owner)) char *__cdecl _strdup(const char *_Src);
   _CONST_RETURN char *__cdecl strchr(const char *_Str,int _Val);
   _CRTIMP int __cdecl _stricmp(const char *_Str1,const char *_Str2);
   _CRTIMP int __cdecl _strcmpi(const char *_Str1,const char *_Str2);
@@ -86,7 +86,7 @@ extern "C" {
   _CRTIMP size_t __cdecl _strxfrm_l(char *_Dst,const char *_Src,size_t _MaxCount,_locale_t _Locale);
 
 #ifndef	NO_OLDNAMES
-  char *__cdecl strdup(const char *_Src);
+  __attribute__((owner)) char *__cdecl strdup(const char *_Src);
   int __cdecl strcmpi(const char *_Str1,const char *_Str2);
   int __cdecl stricmp(const char *_Str1,const char *_Str2);
   char *__cdecl strlwr(char *_Str);
@@ -102,7 +102,7 @@ extern "C" {
 #ifndef _WSTRING_DEFINED
 #define _WSTRING_DEFINED
 
-  _CRTIMP wchar_t *__cdecl _wcsdup(const wchar_t *_Str);
+  _CRTIMP __attribute__((owner)) wchar_t *__cdecl _wcsdup(const wchar_t *_Str);
   wchar_t *__cdecl wcscat(wchar_t *_Dest,const wchar_t *_Source);
   _CONST_RETURN wchar_t *__cdecl wcschr(const wchar_t *_Str,wchar_t _Ch);
   int __cdecl wcscmp(const wchar_t *_Str1,const wchar_t *_Str2);
@@ -152,7 +152,7 @@ extern "C" {
   _CRTIMP int __cdecl _wcsnicoll_l(const wchar_t *_Str1,const wchar_t *_Str2,size_t _MaxCount,_locale_t _Locale);
 
 #ifndef	NO_OLDNAMES
-  wchar_t *__cdecl wcsdup(const wchar_t *_Str);
+  __attribute__((owner)) wchar_t *__cdecl wcsdup(const wchar_t *_Str);
 #define wcswcs wcsstr
   int __cdecl wcsicmp(const wchar_t *_Str1,const wchar_t *_Str2);
   int __cdecl wcsnicmp(const wchar_t *_Str1,const wchar_t *_Str2,size_t _MaxCount);
@@ -168,7 +168,7 @@ extern "C" {
 #if __STDC_VERSION__ >= 202311L
   /* C23, in libtcc1.a */
   void *__cdecl memset_explicit(void *_Dst,int _Val,size_t _Size);
-  char *__cdecl strndup(const char *_Src,size_t _MaxCount);
+  __attribute__((owner)) char *__cdecl strndup(const char *_Src,size_t _MaxCount);
 #endif
 
 #ifdef __cplusplus
