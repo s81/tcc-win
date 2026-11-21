@@ -491,6 +491,62 @@ static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len)
     return ts;
 }
 
+/* C23 6.4.2: identifiers use XID_Start / XID_Continue characters.  tcc has
+   no Unicode property tables: it rejects the code points that are certainly
+   not identifier characters (symbols, punctuation, spaces, emoji, private
+   use, noncharacters) and accepts letters, marks and digits, so it is
+   slightly more permissive than the standard. */
+static int ucn_not_ident(unsigned c)
+{
+    static const unsigned r[][2] = {
+        {0x80, 0xA9}, {0xAB, 0xB4}, {0xB6, 0xB6}, {0xB8, 0xB9}, {0xBB, 0xBF},
+        {0xD7, 0xD7}, {0xF7, 0xF7}, {0x2C2, 0x2C5}, {0x2D2, 0x2DF},
+        {0x2000, 0x203E}, {0x2041, 0x2053}, {0x2055, 0x206F},
+        {0x20A0, 0x20CF}, {0x2190, 0x2BFF}, {0x2E00, 0x2E7F},
+        {0x3000, 0x3004}, {0x3008, 0x3020}, {0xD800, 0xF8FF},
+        {0xFD3E, 0xFD3F}, {0xFDD0, 0xFDEF}, {0xFE10, 0xFE1F},
+        {0xFE30, 0xFE4C}, {0xFE50, 0xFE6F}, {0xFEFF, 0xFEFF},
+        {0xFF01, 0xFF0F}, {0xFF1A, 0xFF20}, {0xFF3B, 0xFF3E},
+        {0xFF40, 0xFF40}, {0xFF5B, 0xFF65}, {0xFFE0, 0xFFFF},
+        {0x1D000, 0x1D24F}, {0x1F000, 0x1FAFF}, {0xE0000, 0x10FFFF},
+    };
+    int i;
+    if ((c & 0xFFFE) == 0xFFFE)
+        return 1;
+    for (i = 0; i < (int)(sizeof r / sizeof r[0]); i++)
+        if (c >= r[i][0] && c <= r[i][1])
+            return 1;
+    return 0;
+}
+
+static void ident_check(const unsigned char *s, int len)
+{
+    int i = 0;
+    while (i < len) {
+        unsigned c = s[i++];
+        int n;
+        if (c < 0x80)
+            continue;
+        if (c >= 0xF0 && c < 0xF8)
+            n = 3, c &= 7;
+        else if (c >= 0xE0)
+            n = 2, c &= 15;
+        else if (c >= 0xC2)
+            n = 1, c &= 31;
+        else
+            n = -1;
+        if (n < 0 || i + n > len)
+            tcc_error("invalid UTF-8 in identifier");
+        while (n--) {
+            if ((s[i] & 0xC0) != 0x80)
+                tcc_error("invalid UTF-8 in identifier");
+            c = c << 6 | (s[i++] & 0x3F);
+        }
+        if (ucn_not_ident(c))
+            tcc_error("character U+%04X is not allowed in an identifier", c);
+    }
+}
+
 #define TOK_HASH_INIT 1
 #define TOK_HASH_FUNC(h, c) ((h) + ((h) << 5) + ((h) >> 27) + (c))
 
@@ -3344,6 +3400,8 @@ maybe_newline:
                 pts = &(ts->hash_next);
             }
             ts = tok_alloc_new(pts, (char *) p1, len);
+            if (!(parse_flags & PARSE_FLAG_ASM_FILE))
+                ident_check((unsigned char *) p1, len);
         token_found: ;
         } else {
             /* slower case */
@@ -3357,6 +3415,8 @@ maybe_newline:
                 PEEKC(c, p);
             }
             ts = tok_alloc(tokcstr.data, tokcstr.size);
+            if (!(parse_flags & PARSE_FLAG_ASM_FILE))
+                ident_check((unsigned char *) tokcstr.data, tokcstr.size);
         }
         tok = ts->tok;
         break;

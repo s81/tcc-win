@@ -6,6 +6,10 @@
 #ifndef _INC_STDIO
 #define _INC_STDIO
 
+#if __STDC_VERSION__ >= 202311L
+#define __STDC_VERSION_STDIO_H__ 202311L
+#endif
+
 #include <_mingw.h>
 
 #pragma pack(push,_CRT_PACKING)
