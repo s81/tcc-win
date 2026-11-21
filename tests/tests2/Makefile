@@ -79,6 +79,7 @@ endif
 ifneq (-$(CONFIG_WIN32)-,-yes-)
  SKIP += 154_stream64.test # Windows file APIs
  SKIP += 156_tls_dll.test 157_declspec_thread.test # Windows DLLs
+ SKIP += 158_tls_run.test # Windows threads and TLS slots
 endif
 
 # Some tests might need arguments

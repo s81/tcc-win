@@ -75,6 +75,16 @@ static DWORD protect_of(void *p)
 }
 #endif
 
+#ifdef _WIN32
+static int (*tls_bump)(int);
+static volatile int tls_result;
+static DWORD WINAPI tls_thread(LPVOID arg)
+{
+    tls_result = tls_bump((int)(INT_PTR)arg);
+    return 0;
+}
+#endif
+
 /* one compile + relocate, then unload by tcc_delete (mode 0) or detach (mode 1) */
 static int cycle(int mode)
 {
@@ -216,6 +226,58 @@ int main(int argc, char **argv)
             tcc_delete(s);
         }
     }
+
+#ifdef _WIN32
+    /* 7. thread-local variables in in-memory code: every thread starts from
+       the initial value, and the per-thread blocks (64 KB each here) are
+       freed when a thread exits and when the code is unloaded */
+    {
+        static const char tls_prog[] =
+            "_Thread_local int t = 5;\n"
+            "_Thread_local char pad[65536];\n"
+            "int bump(int d) { pad[d & 0xffff] = 1; t += d; return t; }\n";
+        size_t before = 0, grown;
+        int bad = 0;
+        HANDLE h;
+
+        s = mk(0, NULL);
+        CHECK(tcc_compile_string(s, tls_prog) == 0);
+        CHECK(tcc_relocate(s) == 0);
+        c = tcc_detach(s);
+        tcc_delete(s);
+        tls_bump = c ? (int (*)(int))tcc_code_symbol(c, "bump") : NULL;
+        CHECK(tls_bump && tls_bump(1) == 6 && tls_bump(1) == 7);
+        if (tls_bump) {
+            h = CreateThread(NULL, 0, tls_thread, (LPVOID)10, 0, NULL);
+            WaitForSingleObject(h, INFINITE), CloseHandle(h);
+            CHECK(tls_result == 15);           /* a fresh copy: 5 + 10 */
+            CHECK(tls_bump(0) == 7);           /* the main thread's copy is unchanged */
+        }
+        tcc_code_free(c);
+
+        for (i = 0; i < 1500; i++) {
+            if (i == 500)
+                before = private_bytes();
+            s = mk(0, NULL);
+            tls_bump = NULL;
+            if (tcc_compile_string(s, tls_prog) == 0 && tcc_relocate(s) == 0)
+                tls_bump = (int (*)(int))tcc_get_symbol(s, "bump");
+            if (!tls_bump || tls_bump(2) != 7) {
+                bad++;
+            } else {
+                h = CreateThread(NULL, 0, tls_thread, (LPVOID)3, 0, NULL);
+                WaitForSingleObject(h, INFINITE), CloseHandle(h);
+                bad += tls_result != 8;
+            }
+            tcc_delete(s);                     /* frees the main thread's block */
+        }
+        CHECK(bad == 0);
+        grown = private_bytes();
+        grown = grown > before ? grown - before : 0;
+        printf("tls: growth over 1000 cycles: %u KB\n", (unsigned)(grown / 1024));
+        CHECK(grown < 4 * 1024 * 1024);        /* a leaked block per cycle is 64 MB */
+    }
+#endif
 
     if (fails)
         printf("%d check(s) failed\n", fails);

@@ -243,12 +243,30 @@ static void gen_modrm(int opc, int op_r2, int r, Sym *sym, int c)
 
     if ((r & VT_SYM) && (sym->type.t & VT_TLS)) {
 #ifdef TCC_TARGET_PE
-        Sym *s2 = external_global_sym(TOK___tls_index, &int_type);
         r = get_reg(RC_INT);
-        gen_modrm(0x8b, r, VT_SYM|VT_CONST, s2, 0); /* mov __tls_index, r */
-        o(0x02e0c1 | r << 8); /* shl 2,r */
-        oad(0x050364 | r << 19, 11*PTR_SIZE); /* add fs:0x2c,r */
-        gen_modrm(0x8b, r, r | VT_LVAL, 0, 0); /* mov (r),r */
+#ifdef TCC_IS_NATIVE
+        if (tcc_state->output_type == TCC_OUTPUT_MEMORY) {
+            /* in-memory code: the thread's block is in a Win32 TLS slot,
+               NULL until the trampoline has made one (see tccrun.c) */
+            Sym *tramp;
+            int slot = tcc_run_tls(tcc_state, &tramp), l = ind;
+            if (slot < 0)
+                tcc_error("no free Win32 TLS slot for thread-local variables in memory");
+            o(0x64); /* mov fs:TEB.TlsSlots[slot],r */
+            gen_modrm(0x8b, r, VT_CONST, NULL, 0xe10 + slot * 4);
+            o(0x85), o(0xc0 | r * 9); /* test r,r */
+            o(0x0775); /* jnz +7 */
+            o(0xe8), gen_addrpc32(VT_SYM, tramp, 0); /* call trampoline */
+            o(0xeb), g(l - (ind + 1)); /* jmp back to the load */
+        } else
+#endif
+        {
+            Sym *s2 = external_global_sym(TOK___tls_index, &int_type);
+            gen_modrm(0x8b, r, VT_SYM|VT_CONST, s2, 0); /* mov __tls_index, r */
+            o(0x02e0c1 | r << 8); /* shl 2,r */
+            oad(0x050364 | r << 19, 11*PTR_SIZE); /* add fs:0x2c,r */
+            gen_modrm(0x8b, r, r | VT_LVAL, 0, 0); /* mov (r),r */
+        }
         o(opc), oad(0x80 | op_reg | r, c); /* mov #c(r),op_reg */
         greloc(cur_text_section, sym, ind - 4, R_386_TLS_LE);
 #else

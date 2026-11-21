@@ -168,8 +168,10 @@ so the compiler state can be deleted while the code stays callable
 
 - `__declspec(thread)` means the same as `_Thread_local`.
   Thread-local variables work in tcc-built EXEs and DLLs, including DLLs that
-  import nothing, but not under `-run` (it stops with
-  `thread-local storage not supported with -run`).
+  import nothing, and in in-memory code (`-run`, libtcc): there each thread
+  gets its own copy on first use, freed when the thread exits or the code is
+  unloaded. In-memory code needs a free Win32 TLS slot below 64, and must not
+  switch fibers while using thread-local variables.
 - Floating-point constants are converted exactly: decimal and hexadecimal
   literals (`float`, `double` and `long double`, which is `double` on
   Windows), and constant folding of `+ - * /` and of integer-to-floating
