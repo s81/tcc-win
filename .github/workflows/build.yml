@@ -17,6 +17,8 @@ jobs:
       run: tests/tccwin-tests.sh
     - name: upstream test suite (host build)
       run: make && make test -k
+    - name: ownership tests with the system headers (glibc)
+      run: sh tests/ownership-host.sh
 
   x86_64-win32:
     runs-on: windows-2025
@@ -150,6 +152,8 @@ jobs:
       run: make -k -C tests/tests2 144_tls.test 146_tls_extern.test 159_tls_run_posix.test
     - name: detached code with thread-local variables
       run: make -C tests libtest_detach
+    - name: ownership tests with the system headers (glibc)
+      run: sh tests/ownership-host.sh
 
   linux-i386:
     runs-on: ubuntu-24.04
@@ -164,3 +168,5 @@ jobs:
       run: setarch i386 make -C tests/tests2 159_tls_run_posix.test
     - name: detached code with thread-local variables
       run: setarch i386 make -C tests libtest_detach
+    - name: ownership tests with the system headers (glibc)
+      run: setarch i386 sh tests/ownership-host.sh
