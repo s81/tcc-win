@@ -251,10 +251,40 @@ free(p);        // error (the same, a double free)
 p = NULL;       // ok: a new value
 ```
 
+**Aliases.** After `q = p` (or `char *q = p;`) of plain pointers, `p` and
+`q` share one resource: releasing either releases both, handing either on
+hands on both, and the resource is a leak only if neither keeps it. This
+holds for locals, parameters, tracked members and globals:
+
+```c
+char *q = p;
+free(q);
+p[0] = 0;       // error: use of pointer 'p' after it was released (released at line 2)
+```
+
+An alias made in only one branch of an `if` (or in a loop body) ends after
+it: `q` is then not checked any more.
+
 **Members and elements.** `s.p` and `v[1]` are tracked like variables. Using
 the struct or array as a whole (`&s`, `t = s`, `return s;`, `f(v)`), or an
 element with an index that is not a constant (`free(v[i])` in a loop),
 hands all its tracked members on: they are not checked any more.
+
+**Members through pointers.** A member of the object a local pointer or
+parameter points to (`n->name`, `n->in.q`, `n->v[1]`) is tracked like a
+global: the object outlives the function, so it is never a leak, but
+overwriting it while it owns a resource it got in the function and using
+it after `free` are errors. Using the pointer itself (`n = n->next`,
+`free(n)`, `f(n)`) and calls as described below end the checking of its
+members. Only one `->` is followed (`n->next->name` is not).
+
+```c
+free(n->name);
+n->name[0] = 0;          // error: use of pointer 'n->name' after it was released
+n->name = strdup(s);     // ok
+n->name = strdup(t);     // error: assignment overwrites pointer 'n->name' which
+                         // still owns a resource (leak)
+```
 
 **Globals and statics.** A global or static pointer keeps its resource
 after the function returns, so it is never a leak. Within a function,
@@ -648,8 +678,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   `p + 1`, `strchr(p, 'x')` or `(char *)s` are not tracked, and a borrow
   initialized from them is not connected to any owner.
 - Plain (unannotated) pointers are checked as described under *Plain
-  pointers that keep an owner result*. Aliases are not followed: after
-  `char *alias = p; free(p);`, a use of `alias` is not reported.
+  pointers that keep an owner result*. Only plain assignments make aliases:
+  `q = p + 1`, `q = strchr(p, 'x')`, `q = (char *)p` or storing `p` in an
+  untracked place hand the resource on instead.
 - With a shared borrow alive, writes through the owner itself (`p[0] = 1`)
   are not detected; only C's `const` protects writes through the borrow.
 - Liveness follows the source text, not the full control-flow graph, so it
@@ -672,9 +703,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
 - Implicit owners (see *Plain pointers that keep an owner result*): members
-  of structs reached through pointers (`n->name = p`), members of global
-  structs and elements of global arrays receive the resource as a
-  hand-off; members of local structs and elements of local arrays are
+  reached through more than one pointer (`n->next->name`), through global
+  pointers, members of global structs and elements of global arrays
+  receive the resource as a hand-off; members of local structs and elements of local arrays are
   tracked with constant indexes below 16 (`s.v[1]`, `v[1].p`). An
   assignment in a condition is followed only for a plain variable name (`if
   ((p = malloc(n)) == NULL)`). Aliases made by functions that return

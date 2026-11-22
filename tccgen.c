@@ -4377,6 +4377,9 @@ struct own_var {
     unsigned char glob; /* global or static plain pointer: tracked within the
                            function only, and only until a call that may
                            change it; never a leak */
+    int grp;       /* plain pointers: aliases ('q = p') share a group id and
+                      one resource: releasing one releases all */
+    int grp_pos;   /* tok_count where it joined the group */
     unsigned char cacq; /* plain pointer tracked from a block nested in the
                            one that declares it: it is owned on some paths
                            only, so 'possibly still owns' is not reported */
@@ -4425,6 +4428,7 @@ static int own_nloops, own_loop_ids;
 struct own_snap {
     int n, live;
     int sc; /* local_scope of the statement */
+    int pos; /* tok_count at the statement */
     unsigned char st[OWN_MAX];
     own_mask of[OWN_MAX];
     /* plain pointers declared before the statement but first tracked in it
@@ -4479,6 +4483,7 @@ static int own_sidx_addrof;
    '[' (see own_ich_begin) */
 static struct { Sym *sym; int pos, addrof; } own_ichs;
 static void own_isub_escape(Sym *s, int off, int size, int assign);
+static int own_psub_sym(Sym *s);
 
 static const char *own_name(struct own_var *o)
 {
@@ -4982,6 +4987,7 @@ static struct own_var *own_new(Sym *s, int kind, int st)
     o->mgen = 0;
     o->rsym = NULL;
     o->impl = o->cacq = o->isub = o->glob = 0;
+    o->grp = o->grp_pos = 0;
     return o;
 }
 
@@ -5254,7 +5260,13 @@ static void own_use(Sym *s)
     own_sidx = NULL;
     if (!own_n || nocode_wanted)
         return;
-    if (s->a.own_impl && (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR) {
+    if (s->a.own_impl && own_psub_sym(s)) {
+        /* 'n->f' members of the object 'n' points to */
+        if (tok == TOK_ARROW)
+            own_ichs.sym = s, own_ichs.pos = tok_count, own_ichs.addrof = addrof;
+        else /* 'n' itself: a new object, or code that may change it */
+            own_isub_escape(s, 0, 0x7fffffff, 0);
+    } else if (s->a.own_impl && (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR) {
         /* struct or array with tracked plain pointers ('s.p', 'v[1]') */
         if (tok == '.' || tok == '[')
             own_ichs.sym = s, own_ichs.pos = tok_count, own_ichs.addrof = addrof;
@@ -5373,10 +5385,59 @@ static void own_use_struct(const struct own_path *p, int addrof)
     }
 }
 
+/* aliases of plain pointers ('q = p'): the state of the shared resource */
+static int own_grp_ids;
+static void own_grp_set(struct own_var *o, int st)
+{
+    int i;
+    o->st = st;
+    if (!o->grp)
+        return;
+    for (i = 0; i < own_n; ++i) {
+        struct own_var *m = &own_vars[i];
+        if (m != o && m->grp == o->grp) {
+            if (st == OWN_NULL && m->st != OWN_OWNED)
+                continue; /* a null test narrows owned ones only */
+            m->st = st;
+            if (st == OWN_MOVED)
+                m->move_line = o->move_line, ++m->mgen;
+        }
+    }
+}
+
+/* 'dst = src' of plain pointers: aliases of one resource */
+static void own_alias(struct own_var *dst, struct own_var *src)
+{
+    if (!src->grp)
+        src->grp = ++own_grp_ids, src->grp_pos = tok_count;
+    dst->grp = src->grp, dst->grp_pos = tok_count;
+    dst->st = src->st, dst->own_line = src->own_line;
+    dst->move_line = src->move_line;
+}
+
+/* another alias of 'o' keeps its resource: index below 'from' (not left),
+   or one that lives on (globals, objects behind pointers, pointers of outer
+   blocks: sym_scope < sc) */
+static int own_grp_kept(struct own_var *o, int from, int sc)
+{
+    int i;
+    if (!o->grp)
+        return 0;
+    for (i = 0; i < own_n; ++i) {
+        struct own_var *m = &own_vars[i];
+        if (m != o && m->grp == o->grp
+            && (i < from || m->glob || m->sym->sym_scope < sc))
+            return 1;
+    }
+    return 0;
+}
+
 /* 'o = expr' has been parsed: the old value of owner 'o' is lost unless the
    right hand side moved it */
 static void own_check_overwrite(struct own_var *o)
 {
+    if (o->grp && own_grp_kept(o, own_n, 0x7fff))
+        return; /* an alias keeps the resource */
     if (o->kind == OWN_OWNER && ((o->st == OWN_OWNED
         /* a field of the caller's object that was not touched yet may
            be uninitialized (init functions) */
@@ -5411,7 +5472,7 @@ static void own_use_o(struct own_var *o, int addrof)
         if (o->st == OWN_MOVED && o->move_line > 0) {
             char at[48];
             if (addrof == 1 && tok != '[' && tok != TOK_ARROW && tok != '(') {
-                o->st = OWN_UNTR; /* '&p': may be set via the pointer */
+                own_grp_set(o, OWN_UNTR); /* '&p': may be set via the pointer */
                 return;
             }
             /* only reading the old value ('if (p)', '(uintptr_t)p', 'q = p')
@@ -5428,7 +5489,7 @@ static void own_use_o(struct own_var *o, int addrof)
             /* a plain pointer: any use other than '*p', 'p[i]', 'p->f', a
                null test or an argument that is not kept may keep a copy,
                which then owns the resource: not checked any more */
-            o->st = OWN_UNTR;
+            own_grp_set(o, OWN_UNTR);
             return;
         }
         own_read(o);
@@ -5805,7 +5866,7 @@ static void own_narrow(struct own_var *o)
 {
     if (o && o->kind == OWN_OWNER && o->st == OWN_OWNED) {
         struct own_var *p = o->rsym && o->ridx < own_n ? &own_vars[o->ridx] : NULL;
-        o->st = OWN_NULL;
+        own_grp_set(o, OWN_NULL);
         /* 'q = realloc(p, n)' failed: 'p' still owns its resource */
         if (p && p->sym == o->rsym && p->st == OWN_MOVED && p->mgen == o->rgen)
             p->st = o->rst, p->own_line = o->rline;
@@ -5836,6 +5897,8 @@ static void own_move(struct own_var *o)
     o->move_line = own_line_now();
     ++o->mgen;
     own_kids_reset(o);
+    if (o->impl)
+        own_grp_set(o, OWN_MOVED); /* its aliases are released too */
 }
 
 /* borrow 'b' now borrows from 'src' (NULL: from something untracked) */
@@ -5869,8 +5932,12 @@ static void own_assign(struct own_var *dst, struct own_var *src)
     dst->rsym = NULL;
     if (dst->kind == OWN_OWNER) {
         int st = src && src->impl ? src->st : OWN_OWNED;
-        if (src && src->impl)
-            src->st = OWN_UNTR; /* 'q = p': 'q' owns what 'p' owned */
+        if (dst->impl)
+            dst->grp = 0; /* a new value: no longer an alias */
+        if (src && src->impl && dst->impl && src != dst) {
+            own_alias(dst, src); /* 'q = p': aliases of one resource */
+        } else if (src && src->impl)
+            own_grp_set(src, OWN_UNTR); /* '[[owner]] q = p': 'q' owns it */
         else
             own_move(src);
         if (st == OWN_MOVED && src && src->move_line > 0)
@@ -5881,7 +5948,7 @@ static void own_assign(struct own_var *dst, struct own_var *src)
             dst->st = OWN_UNTR; /* not an owner value: not checked */
         if (dst->kind == OWN_OWNER && !dst->impl && dst->st > OWN_NULL)
             dst->st = OWN_OWNED;
-        if (dst->st == OWN_OWNED) /* a null value acquires nothing */
+        if (dst->st == OWN_OWNED && !dst->grp) /* a null value acquires nothing */
             dst->own_line = own_line_now();
         own_kids_reset(dst);
     } else {
@@ -6011,7 +6078,9 @@ static struct own_var *own_find_isub(Sym *s, int off)
     return NULL;
 }
 
-static struct own_var *own_isub_new(Sym *s, int off, const char *name)
+/* 'ptr': member of the object that the local pointer 's' points to
+   ('n->f'): that object outlives the function like a global, see glob */
+static struct own_var *own_isub_new(Sym *s, int off, const char *name, int ptr)
 {
     struct own_var *o;
     if (!s || nocode_wanted || own_n >= OWN_MAX - OWN_RESERVE)
@@ -6019,14 +6088,23 @@ static struct own_var *own_isub_new(Sym *s, int off, const char *name)
     if ((o = own_find_isub(s, off)))
         return o;
     o = own_new(s, OWN_OWNER, OWN_MOVED);
-    o->impl = o->isub = 1;
+    o->impl = 1, o->isub = ptr ? 2 : 1, o->glob = ptr != 0;
     o->fld = s; /* (a marker: not a [[owner]] field, see own_find) */
     o->depth = 0xff;
     o->off = off;
     pstrcpy(o->fname, sizeof o->fname, name);
-    o->cacq = s->sym_scope != local_scope;
+    o->cacq = !ptr && s->sym_scope != local_scope;
     s->a.own_impl = 1;
     return o;
+}
+
+/* is 's' a local pointer to a struct whose members may be tracked ('n->f')? */
+static int own_psub_sym(Sym *s)
+{
+    return s && local_stack && !s->a.owner && !s->a.borrow
+        && (s->r & VT_VALMASK) == VT_LOCAL && !(s->type.t & (VT_STATIC | VT_EXTERN))
+        && (s->type.t & (VT_BTYPE | VT_ARRAY)) == VT_PTR
+        && (pointed_type(&s->type)->t & (VT_BTYPE | VT_ARRAY)) == VT_STRUCT;
 }
 
 /* the members of 's' in [off, off + size) are used in a way that is not
@@ -6039,7 +6117,7 @@ static void own_isub_escape(Sym *s, int off, int size, int assign)
         if (o->isub && !o->gone && o->sym == s && o->off >= off && o->off < off + size) {
             if (assign)
                 own_check_overwrite(o);
-            o->st = OWN_UNTR;
+            own_grp_set(o, OWN_UNTR);
             o->gone = 1; /* like arrays of owners: not checked any more */
         }
     }
@@ -6049,11 +6127,12 @@ static void own_isub_escape(Sym *s, int off, int size, int assign)
 static struct own_ichain {
     Sym *sym;
     int off, pos, addrof;
+    int ptr; /* 'n->f': through the pointer 'n' */
     CType type;
     char name[64];
 } own_ich;
 /* untracked 's.p' / 'v[1]' just parsed and followed by '=' */
-static struct { Sym *sym; int off, pos; char name[64]; } own_ilv;
+static struct { Sym *sym; int off, pos, ptr; char name[64]; } own_ilv;
 
 /* a '.' or '[' follows: is it a member path of a local struct/array? */
 static int own_ich_begin(void)
@@ -6066,7 +6145,28 @@ static int own_ich_begin(void)
     own_ich.sym = NULL;
     if (!(s = own_isub_root(vtop)))
         return 0;
-    own_ich.sym = s, own_ich.off = 0, own_ich.type = s->type;
+    own_ich.sym = s, own_ich.off = 0, own_ich.type = s->type, own_ich.ptr = 0;
+    own_ich.addrof = own_ichs.sym == s && own_ichs.pos == tok_count ? own_ichs.addrof : 0;
+    pstrcpy(own_ich.name, sizeof own_ich.name, get_tok_str(s->v, NULL));
+    return 1;
+}
+
+/* a '->' follows: is it 'n->f' of a local pointer 'n' to a struct? */
+static int own_ich_begin_arrow(void)
+{
+    Sym *s = vtop->sym;
+    if (nocode_wanted || (own_ich.sym && own_ich.pos == tok_count)) {
+        own_ich.sym = NULL; /* 's.q->f': not followed */
+        return 0;
+    }
+    own_ich.sym = NULL;
+    if (!own_psub_sym(s)
+        || (vtop->r & (VT_VALMASK | VT_LVAL)) != (VT_LOCAL | VT_LVAL)
+        || vtop->c.i != s->c || vtop->type.t != s->type.t
+        || vtop->type.ref != s->type.ref)
+        return 0;
+    own_ich.sym = s, own_ich.off = 0, own_ich.ptr = 1;
+    own_ich.type = *pointed_type(&s->type);
     own_ich.addrof = own_ichs.sym == s && own_ichs.pos == tok_count ? own_ichs.addrof : 0;
     pstrcpy(own_ich.name, sizeof own_ich.name, get_tok_str(s->v, NULL));
     return 1;
@@ -6085,7 +6185,7 @@ static void own_ich_step(int off, CType *type, const char *suffix)
             own_use_o(o, own_ich.addrof);
         else if (tok == '=') {
             own_ilv.sym = own_ich.sym, own_ilv.off = own_ich.off;
-            own_ilv.pos = tok_count;
+            own_ilv.pos = tok_count, own_ilv.ptr = own_ich.ptr;
             pstrcpy(own_ilv.name, sizeof own_ilv.name, own_ich.name);
         }
     } else if ((t->t & VT_ARRAY) || (t->t & VT_BTYPE) == VT_STRUCT) {
@@ -6102,17 +6202,27 @@ static void own_ich_step(int off, CType *type, const char *suffix)
    tracked member: set '*po', return the index after it, or -1 */
 static int own_tk_isub_c(const int *tk, int i, int n, struct own_var **po, int create)
 {
-    Sym *s, *f;
+    Sym *s, *f = NULL;
     CType type;
     int off = 0, cum, align;
     char name[64];
+    int ptr = 0;
     if (i >= n || tk[i] < TOK_UIDENT || !(s = sym_find(tk[i]))
         || !(create || s->a.own_impl)
-        || (!(s->type.t & VT_ARRAY) && (s->type.t & VT_BTYPE) != VT_STRUCT)
         || (s->r & VT_VALMASK) != VT_LOCAL || (s->type.t & (VT_STATIC | VT_EXTERN)))
         return -1;
     pstrcpy(name, sizeof name, get_tok_str(s->v, NULL));
     type = s->type, ++i;
+    if (own_psub_sym(s) && i + 1 < n && tk[i] == TOK_ARROW && tk[i + 1] >= TOK_UIDENT) {
+        type = *pointed_type(&type); /* 'n->f' */
+        if (!type.ref || !(f = find_field(&type, tk[i + 1] | SYM_FIELD, &cum)))
+            return -1;
+        pstrcat(name, sizeof name, "->");
+        pstrcat(name, sizeof name, get_tok_str(tk[i + 1], NULL));
+        off += cum, type = f->type, i += 2, ptr = 1;
+    } else if (s->a.owner || s->a.borrow
+        || (!(s->type.t & VT_ARRAY) && (s->type.t & VT_BTYPE) != VT_STRUCT))
+        return -1;
     for (;;) {
         if (i + 2 < n && tk[i] == '[' && OWN_TK_ISIDX(tk[i + 1]) && tk[i + 2] == ']') {
             char b[16];
@@ -6133,10 +6243,11 @@ static int own_tk_isub_c(const int *tk, int i, int n, struct own_var **po, int c
         } else
             break;
     }
-    if ((type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR || (create && i != n))
+    if ((type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR || (create && i != n)
+        || (f && f->a.owner)) /* [[owner]] fields are tracked as such */
         return -1;
     if (!(*po = own_find_isub(s, off))) {
-        if (!create || !(*po = own_isub_new(s, off, name)))
+        if (!create || !(*po = own_isub_new(s, off, name, ptr)))
             return -1;
         (*po)->st = OWN_UNTR;
     }
@@ -6155,7 +6266,8 @@ static struct own_var *own_peek_isub(void)
     int tk[OWN_SCAN_MAX], n;
     Sym *s;
     if (!own_n || nocode_wanted || tok < TOK_UIDENT || !(s = sym_find(tok))
-        || !s->a.own_impl || (s->type.t & (VT_BTYPE | VT_ARRAY)) == VT_PTR)
+        || !s->a.own_impl
+        || ((s->type.t & (VT_BTYPE | VT_ARRAY)) == VT_PTR && !own_psub_sym(s)))
         return NULL;
     n = own_scan(tk, ')', ',');
     return n > 0 && own_tk_isub(tk, 0, n, &o) == n ? o : NULL;
@@ -6177,7 +6289,31 @@ static void own_call_globals(Sym *callee)
     }
     for (i = 0; i < own_n; ++i)
         if (own_vars[i].glob)
-            own_vars[i].st = OWN_UNTR;
+            own_grp_set(&own_vars[i], OWN_UNTR);
+}
+
+/* the right hand side of 'q = p' / 'char *q = p' follows: if it is the
+   plain name of an untracked plain pointer, track it, so that 'q' and 'p'
+   are aliases ('free(p)' then releases 'q' too) */
+static struct own_var *own_alias_peek(void)
+{
+    struct own_var *o = NULL;
+    Sym *s;
+    int t;
+    if (nocode_wanted || tok < TOK_UIDENT || !(s = sym_find(tok))
+        || (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR
+        || own_n >= OWN_MAX - OWN_RESERVE - 8)
+        return NULL;
+    if ((o = own_find(s)))
+        return o->impl ? o : NULL;
+    t = tok;
+    next();
+    if (tok == ';' || tok == ',' || tok == ')') {
+        if ((o = own_impl_new(s)))
+            o->st = OWN_UNTR;
+    }
+    unget_tok(t);
+    return o;
 }
 
 /* an argument for [[owner]] parameter follows: if it is the plain name of
@@ -6189,12 +6325,16 @@ static void own_impl_arg(void)
     int t;
     if (nocode_wanted || tok < TOK_UIDENT || !(s = sym_find(tok)) || own_find(s))
         return;
-    if ((s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR) { /* 'free(s.p)' */
+    if ((s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR || own_psub_sym(s)) {
+        /* 'free(s.p)', 'free(n->name)' */
         int tk[OWN_SCAN_MAX], n;
         struct own_var *po;
-        if ((s->r & VT_VALMASK) == VT_LOCAL && (n = own_scan(tk, ')', ',')) > 2)
+        if ((s->r & VT_VALMASK) == VT_LOCAL && (n = own_scan(tk, ')', ',')) > 2) {
             own_tk_isub_c(tk, 0, n, &po, 1);
-        return;
+            return;
+        }
+        if ((s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR)
+            return;
     }
     t = tok;
     next();
@@ -6280,6 +6420,17 @@ static void own_check_leaks(int from, const char *where, int sc)
         if (own_vars[i].impl && (own_vars[i].sym->sym_scope < sc
             || own_vars[i].glob || (own_vars[i].cacq && st == OWN_MAYBE)))
             continue;
+        if (own_vars[i].grp && (st == OWN_OWNED || st == OWN_MAYBE)) {
+            /* aliases: one report, and none if one of them lives on */
+            int j, first = 1;
+            if (own_grp_kept(&own_vars[i], from, sc))
+                continue;
+            for (j = from; j < i; ++j)
+                if (own_vars[j].grp == own_vars[i].grp)
+                    first = 0;
+            if (!first)
+                continue;
+        }
         if (own_vars[i].ptr) {
             /* 'ps->f' (only checked at the end of the function): the
                object outlives the function and must not keep a pointer
@@ -6386,7 +6537,7 @@ static void own_save(struct own_snap *sn)
 {
     int i;
     sn->n = own_n, sn->live = !nocode_wanted;
-    sn->sc = local_scope, sn->nx = 0;
+    sn->sc = local_scope, sn->nx = 0, sn->pos = tok_count;
     for (i = 0; i < own_n; ++i)
         sn->st[i] = own_vars[i].st, sn->of[i] = own_vars[i].of;
 }
@@ -6410,6 +6561,9 @@ static int own_snapx(struct own_snap *sn, struct own_var *o)
 static void own_restore(struct own_snap *sn)
 {
     int i, k;
+    for (i = 0; i < own_n; ++i)
+        if (own_vars[i].grp && own_vars[i].grp_pos > sn->pos)
+            own_vars[i].grp = 0; /* made after the snapshot */
     for (i = 0; i < sn->n && i < own_n; ++i)
         if (!own_vars[i].gone)
             own_vars[i].st = sn->st[i], own_vars[i].of = sn->of[i];
@@ -6435,11 +6589,15 @@ static void own_acc(struct own_snap *acc, int live)
     if (!live)
         return;
     for (i = 0; i < acc->n && i < own_n; ++i) {
+        /* an alias made on this path only: it owns nothing that is
+           tracked on its own (the group ends at the join, own_restore) */
+        int st = own_vars[i].grp && own_vars[i].grp_pos > acc->pos
+            ? OWN_UNTR : own_vars[i].st;
         if (acc->live) {
-            acc->st[i] = own_join(acc->st[i], own_vars[i].st);
+            acc->st[i] = own_join(acc->st[i], st);
             acc->of[i] |= own_vars[i].of; /* borrowed on any path */
         } else {
-            acc->st[i] = own_vars[i].st;
+            acc->st[i] = st;
             acc->of[i] = own_vars[i].of;
         }
     }
@@ -6449,6 +6607,7 @@ static void own_acc(struct own_snap *acc, int live)
         int k;
         for (; i < own_n; ++i) {
             struct own_var *o = &own_vars[i];
+            int ost = o->grp && o->grp_pos > acc->pos ? OWN_UNTR : o->st;
             if (!own_outlives(o, acc))
                 continue;
             k = own_snapx(acc, o);
@@ -6458,9 +6617,9 @@ static void own_acc(struct own_snap *acc, int live)
                 k = acc->nx++;
                 acc->xs[k] = o->sym;
                 acc->xoff[k] = o->isub ? o->off : -1;
-                acc->xst[k] = acc->live ? own_join(OWN_UNTR, o->st) : o->st;
+                acc->xst[k] = acc->live ? own_join(OWN_UNTR, ost) : ost;
             } else
-                acc->xst[k] = own_join(acc->xst[k], o->st);
+                acc->xst[k] = own_join(acc->xst[k], ost);
             seen |= 1u << k;
         }
         for (k = 0; k < acc->nx; ++k)
@@ -6473,7 +6632,7 @@ static void own_acc(struct own_snap *acc, int live)
 static void own_acc_init(struct own_snap *acc)
 {
     acc->n = own_n, acc->live = 0;
-    acc->sc = local_scope, acc->nx = 0;
+    acc->sc = local_scope, acc->nx = 0, acc->pos = tok_count;
 }
 
 /* at 'case/default': reachable from the switch and maybe by fall through */
@@ -9266,7 +9425,7 @@ special_math_val:
         } else if (tok == '.' || tok == TOK_ARROW) {
             int qualifiers, cumofs, own_a = own_sdot_addrof;
             int own_arrow = tok == TOK_ARROW;
-            int own_ic = !own_arrow && own_ich_begin();
+            int own_ic = own_arrow ? own_ich_begin_arrow() : own_ich_begin();
             struct own_path own_p = own_sdot;
             if (own_p.sym && !(own_arrow ? own_is_psv_type(own_p.type)
                                : own_is_sv_type(own_p.type)))
@@ -9303,8 +9462,12 @@ special_math_val:
                 own_use_field(&own_p, s, cumofs, own_a, own_arrow);
             if (own_ic) {
                 char b[40];
-                snprintf(b, sizeof b, ".%s", get_tok_str(s->v & ~SYM_FIELD, NULL));
-                own_ich_step(cumofs, &s->type, b);
+                snprintf(b, sizeof b, "%s%s", own_arrow ? "->" : ".",
+                    get_tok_str(s->v & ~SYM_FIELD, NULL));
+                if (s->a.owner) /* [[owner]] fields are tracked as such */
+                    own_ich.sym = NULL;
+                else
+                    own_ich_step(cumofs, &s->type, b);
             } else
                 own_ich.sym = NULL;
         } else if (tok == '[') {
@@ -9954,7 +10117,7 @@ static void expr_eq(void)
         struct own_path sdst = own_spending, ssrc;
         int has_ssrc;
         Sym *ilv = t == '=' && own_ilv.sym && own_ilv.pos == tok_count ? own_ilv.sym : NULL;
-        int ilv_off = own_ilv.off;
+        int ilv_off = own_ilv.off, ilv_ptr = own_ilv.ptr;
         char ilv_name[64];
         pstrcpy(ilv_name, sizeof ilv_name, ilv ? own_ilv.name : "");
         own_ilv.sym = NULL;
@@ -9970,21 +10133,38 @@ static void expr_eq(void)
                         == (VT_CONST | VT_LVAL | VT_SYM) && vtop->c.i == 0))
                 && vtop->type.t == vtop->sym->type.t
                 && vtop->type.ref == vtop->sym->type.ref ? vtop->sym : NULL;
+            struct own_var *amv = NULL, *noesc0 = own_noesc;
             mv = dst ? own_peek(0) : NULL;
+            if (dst && !mv && dst->impl)
+                mv = own_peek_isub();
             if (mv && dst->kind == OWN_OWNER)
                 own_kids_check(mv, 0);
+            if (!dst && (isym || ilv) && own_n) {
+                /* 'q = p' of a tracked plain pointer 'p': an alias */
+                if (!(amv = own_peek(0)))
+                    amv = own_peek_isub();
+                if (amv && !amv->impl)
+                    amv = NULL;
+            }
+            if (!dst && !amv && (ilv || (isym
+                && (isym->type.t & (VT_BTYPE | VT_ARRAY)) == VT_PTR)))
+                amv = own_alias_peek();
             has_ssrc = sdst.sym && own_peek_sv(&ssrc);
             own_slast.sym = NULL;
             own_lending = dst && dst->kind != OWN_OWNER ? mv : NULL;
+            if ((mv && mv->impl && dst->impl) || amv)
+                own_noesc = mv ? mv : amv; /* not an escape: an alias */
             expr_eq();
-            own_lending = NULL;
-            if (isym && own_res_call)
+            own_lending = NULL, own_noesc = noesc0;
+            if (isym && (own_res_call || amv))
                 dst = own_impl_new(isym);
-            if (!dst && ilv && own_res_call) /* 's.p = malloc(n)' */
-                dst = own_isub_new(ilv, ilv_off, ilv_name);
+            if (!dst && ilv && (own_res_call || amv)) /* 's.p = malloc(n)' */
+                dst = own_isub_new(ilv, ilv_off, ilv_name, ilv_ptr);
+            if (!dst && amv) /* not tracked: 'p' is handed on */
+                own_grp_set(amv, OWN_UNTR);
             if (dst)
                 own_check_overwrite(dst);
-            own_assign(dst, mv);
+            own_assign(dst, mv ? mv : amv);
             own_rlink(dst);
             own_sassign(&sdst, has_ssrc ? &ssrc : NULL);
         } else {
@@ -12749,13 +12929,27 @@ static int decl(int l)
                                    && (type.t & (VT_BTYPE|VT_ARRAY)) == VT_PTR
                                    && !nocode_wanted) {
                             /* 'char *p = malloc(n);': see own_impl_new() */
-                            struct own_var *io;
+                            struct own_var *io, *amv = NULL, *noesc0 = own_noesc;
+                            if (own_n && !(amv = own_peek(0)))
+                                amv = own_peek_isub();
+                            if (amv && !amv->impl)
+                                amv = NULL;
+                            if (!amv)
+                                amv = own_alias_peek();
                             own_res_stored = 0;
+                            if (amv)
+                                own_noesc = amv; /* 'char *q = p;': an alias */
                             decl_initializer_alloc(&type, &ad, r, has_init, v, l);
+                            own_noesc = noesc0;
                             if (own_res_stored && (io = own_impl_new(sym_find(v)))) {
                                 io->st = OWN_OWNED;
                                 io->own_line = own_line_now();
                                 own_rlink(io);
+                            } else if (amv) {
+                                if ((io = own_impl_new(sym_find(v))))
+                                    own_alias(io, amv);
+                                else
+                                    own_grp_set(amv, OWN_UNTR);
                             }
                             own_res_stored = 0;
                         } else

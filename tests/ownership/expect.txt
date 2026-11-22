@@ -84,3 +84,10 @@ err_plain_field_uaf.c use of pointer 's.p' after it was released
 err_plain_elem_leak.c pointer 'a[0]' still owns a resource at end of scope (leak)
 err_plain_global_overwrite.c assignment overwrites pointer 'g' which still owns a resource (leak)
 err_plain_global_uaf.c use of pointer 'g' after it was released
+err_plain_alias_uaf.c use of pointer 'p' after it was released (released at line 3)
+err_plain_alias_double_free.c use of pointer 'q' after it was released
+err_plain_alias_param.c use of pointer 'p' after it was released
+err_plain_alias_leak.c pointer 'p' still owns a resource at end of scope (leak)
+err_plain_ptrfield_overwrite.c assignment overwrites pointer 'n->name' which still owns a resource (leak)
+err_plain_ptrfield_uaf.c use of pointer 'n->name' after it was released
+err_plain_ptrfield_nested.c use of pointer 'n->v[1]' after it was released
