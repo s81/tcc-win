@@ -721,15 +721,13 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
 - Implicit owners (see *Plain pointers that keep an owner result*): members
-  reached through more than one pointer (`n->next->name`), through global
-  pointers, members of global structs and elements of global arrays
-  receive the resource as a hand-off; members of local structs and elements of local arrays are
-  tracked with constant indexes below 16 (`s.v[1]`, `v[1].p`). An
-  assignment in a condition is followed only for a plain variable name (`if
-  ((p = malloc(n)) == NULL)`). Aliases made by functions that return
-  their argument (`q = strcpy(p, s)`) count as a hand-off. Implicit owners
-  count towards the limit of 64 tracked variables, but are only created
-  while fewer than 48 are tracked.
+  reached through more than one pointer (`n->next->name`), members of global
+  structs and elements of global arrays receive the resource as a hand-off;
+  members of local structs and elements of local arrays are tracked with
+  constant indexes below 16 (`s.v[1]`, `v[1].p`). An assignment in a
+  condition is followed only for a plain variable name (`if ((p = malloc(n))
+  == NULL)`). Implicit owners count towards the limit of 64 tracked
+  variables, but are only created while fewer than 48 are tracked.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
   and array element counts as one).
