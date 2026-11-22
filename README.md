@@ -9,8 +9,10 @@ A Windows-only fork of the [Tiny C Compiler](https://repo.or.cz/tinycc.git)
    (opt-in, compile-time only, see [docs/OWNERSHIP.md](docs/OWNERSHIP.md)),
    including `[[owner]]` fields of local structs, local arrays of owners
    (element by element, for constant indexes) and owner fields reached
-   through owner pointers (`p->data`, `p->next->data`). Globals, statics,
-   plain (unannotated) pointers and struct arrays are not tracked.
+   through owner pointers (`p->data`, `p->next->data`). Plain (unannotated)
+   pointers are checked for leaks and use after free too, global and static
+   ones only within a function; struct arrays are not tracked. See
+   [docs/OWNERSHIP.md](docs/OWNERSHIP.md) for the exact rules.
 3. **No `goto`** (see [below](#no-goto)).
 
 ```c
