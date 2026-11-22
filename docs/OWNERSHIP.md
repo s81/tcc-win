@@ -309,6 +309,33 @@ overwriting it while it owns a resource it got there, and using it after
 functions above may change the global, so it is not checked after such a
 call.
 
+An `[[owner]]` global or static pointer (also a `static` local) follows the
+same rules, with owner semantics: a copy of it (`char *x = g;`, `keep = g;`,
+`f(g)`) is a borrow, so it still owns its resource, and overwriting it then
+is a leak; `g = h` of two `[[owner]]` globals, `g = x` of an `[[owner]]`
+local and `[[owner]] char *x = g;` are moves. Its state at the start of a
+function is unknown, so the first assignment is not checked
+(`g = malloc(n);` in an init function is fine). `[[owner]]` and `[[borrow]]`
+on a global need a pointer type, as for locals; file-scope arrays of owners
+are accepted but not tracked.
+
+```c
+[[owner]] static char *g;
+
+void set(const char *s) { free(g); g = strdup(s); }   // ok
+void bad(void) {
+    g = malloc(4);
+    char *x = g;          // a borrow: g still owns the block
+    g = malloc(8);        // error: assignment overwrites owner 'g' which
+                          // still owns a resource (leak)
+}
+[[owner]] char *take(void) {
+    [[owner]] char *t = g; // moved out of g
+    g = NULL;
+    return t;
+}
+```
+
 ## Borrows
 
 A borrow is created when the plain name of an owner or of another borrow is
@@ -658,7 +685,7 @@ Limitations of struct tracking:
   through plain (unannotated) pointers (`struct node *q = ...; q->data`,
   `s.ptr->data` for a member without `[[owner]]`, `n->prev->data`) and
   through borrows (`m->data` for a `[[borrow_mut]]` `m`) are not tracked.
-  Globals and statics are not tracked.
+  `[[owner]]` fields of global and static structs are not tracked.
 - Fields more than four member names deep (counting the members after
   `->` as well, e.g. `n->next->next->next->next->data`) are not tracked.
 - An `[[owner]]` function parameter of type `void *` is taken to release
@@ -712,7 +739,9 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
 - At most 128 conflicts are pending per function; beyond that a conflict is
   reported as an error right away (as if the borrow were used again).
 - Taking the address (`&p`) marks `p` as owned, on all paths.
-- Owners and borrows in globals and statics are not tracked; arrays only
+- `[[owner]]` globals and statics are tracked only within a function and
+  until a call that may change them (see *Globals and statics*); borrows in
+  globals and statics are not tracked; arrays only
   as described under *Arrays of owners* (constant indexes; any other use
   stops the checking of the array); in structs only `[[owner]]` fields of
   local struct variables, by-value parameters, objects behind pointer

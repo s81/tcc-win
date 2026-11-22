@@ -1258,6 +1258,12 @@ static void merge_symattr(struct SymAttr *sa, struct SymAttr *sa1)
     sa->dllexport |= sa1->dllexport;
     sa->nodecorate |= sa1->nodecorate;
     sa->dllimport |= sa1->dllimport;
+    /* ownership attributes: also for globals and statics, which get their
+       attributes here (decl_initializer_alloc) */
+    sa->owner |= sa1->owner;
+    sa->realloc |= sa1->realloc;
+    if (sa1->borrow && !sa->borrow)
+        sa->borrow = sa1->borrow;
 }
 
 /* Merge function attributes.  */
@@ -4381,6 +4387,8 @@ struct own_var {
     unsigned char glob; /* global or static plain pointer: tracked within the
                            function only, and only until a call that may
                            change it; never a leak */
+    unsigned char xown; /* glob that is declared [[owner]]: a copy of it is
+                           a borrow, it keeps its resource */
     int grp;       /* plain pointers: aliases ('q = p') share a group id and
                       one resource: releasing one releases all */
     int grp_pos;   /* tok_count where it joined the group */
@@ -4523,6 +4531,9 @@ static const char *own_kind_str(int kind)
 {
     return kind == OWN_MUT ? "mutable" : kind == OWN_SHARED ? "shared" : "owner";
 }
+
+static struct own_var *own_xglob(Sym *s);
+static int own_is_glob(Sym *s);
 
 static struct own_var *own_find(Sym *s)
 {
@@ -4966,6 +4977,26 @@ static void own_declare(Sym *s, int st)
     (void)o;
 }
 
+/* [[owner]] / [[borrow]] on a global, static or extern variable: the same
+   rules as for locals; arrays of pointers are allowed (not tracked) */
+static void own_gdecl_check(CType *type, AttributeDef *ad, int v)
+{
+    const char *name = get_tok_str(v, NULL);
+    CType *t = type;
+    if (ad->a.owner && ad->a.borrow) {
+        own_err(NULL, "'%s' cannot be both [[owner]] and [[borrow]]", name);
+        return;
+    }
+    while (t->t & VT_ARRAY)
+        t = pointed_type(t);
+    if ((t->t & (VT_BTYPE | VT_ARRAY)) != VT_PTR)
+        own_err(NULL, "[[%s]] requires a pointer type ('%s')", ad->a.owner
+            ? "owner" : ad->a.borrow == OWN_MUT ? "borrow_mut" : "borrow", name);
+    else if (ad->a.borrow == OWN_SHARED && !(pointed_type(t)->t & VT_CONSTANT))
+        own_err(NULL, "[[borrow]] requires a pointer to const ('%s');"
+            " use [[borrow_mut]] for write access", name);
+}
+
 static struct own_var *own_new(Sym *s, int kind, int st)
 {
     struct own_var *o;
@@ -5266,6 +5297,8 @@ static void own_use(Sym *s)
 
     own_pending = NULL, own_addrof = 0, own_spending.sym = NULL, own_sdot.sym = NULL;
     own_sidx = NULL;
+    if (s->a.owner)
+        own_xglob(s); /* an [[owner]] global or static */
     if (!own_n || nocode_wanted)
         return;
     if (s->a.own_impl && own_psub_sym(s)) {
@@ -5471,7 +5504,13 @@ static int own_grp_kept(struct own_var *o, int from, int sc)
    right hand side moved it */
 static void own_check_overwrite(struct own_var *o)
 {
-    if (o->grp && own_grp_kept(o, own_n, 0x7fff))
+    if (o->xown && o->grp) {
+        /* an [[owner]] global keeps its resource: copies of it are borrows */
+        int i;
+        for (i = 0; i < own_n; ++i)
+            if (&own_vars[i] != o && own_vars[i].grp == o->grp)
+                own_vars[i].st = OWN_UNTR, own_vars[i].grp = 0;
+    } else if (o->grp && own_grp_kept(o, own_n, 0x7fff))
         return; /* an alias keeps the resource */
     if (o->kind == OWN_OWNER && ((o->st == OWN_OWNED
         /* a field of the caller's object that was not touched yet may
@@ -5480,7 +5519,7 @@ static void own_check_overwrite(struct own_var *o)
         && !(o->lazy && o->own_line < 0) && !o->cacq))) {
         char at[48];
         own_err(o, "assignment overwrites %s '%s' which %s owns a resource (leak)%s",
-            o->impl ? "pointer" : "owner",
+            o->impl && !o->xown ? "pointer" : "owner",
             own_name(o), o->st == OWN_OWNED ? "still" : "possibly still",
             own_at(at, "acquired", o->own_line));
     }
@@ -5517,6 +5556,9 @@ static void own_use_o(struct own_var *o, int addrof)
             if (o->dgrp)
                 own_err(o, "use of pointer '%s' after the memory it points into"
                     " was released%s", name, own_at(at, "released", o->move_line));
+            else if (o->xown) /* as for local owners */
+                own_err(o, "use of owner '%s' after move%s", name,
+                    own_at(at, "moved", o->move_line));
             else
                 own_err(o, "use of pointer '%s' after it was released%s", name,
                     own_at(at, "released", o->move_line));
@@ -5524,7 +5566,7 @@ static void own_use_o(struct own_var *o, int addrof)
             return;
         }
         if (o->st != OWN_MOVED && addrof != 2 && tok != '['
-            && tok != TOK_ARROW && o != own_noesc) {
+            && tok != TOK_ARROW && o != own_noesc && !o->xown) {
             /* a plain pointer: any use other than '*p', 'p[i]', 'p->f', a
                null test or an argument that is not kept may keep a copy,
                which then owns the resource: not checked any more */
@@ -5635,10 +5677,14 @@ static struct own_var *own_peek(int null_test)
     Sym *s;
     int t, tk[OWN_TK_PATH];
 
-    if (!own_n || nocode_wanted || tok < TOK_UIDENT)
+    if (nocode_wanted || tok < TOK_UIDENT)
         return NULL;
     s = sym_find(tok);
-    o = s ? own_find(s) : NULL;
+    if (!own_n && !(s && s->a.owner && own_is_glob(s)))
+        return NULL;
+    o = s ? own_xglob(s) : NULL;
+    if (s && !o)
+        o = own_find(s);
     if (s && (!o || (o->kind == OWN_OWNER && own_is_psv_type(&s->type)))) {
         /* 's.f', 'ps->f', 'p->f', 'v[1]' */
         struct own_var *po;
@@ -5973,7 +6019,9 @@ static void own_assign(struct own_var *dst, struct own_var *src)
         int st = src && src->impl ? src->st : OWN_OWNED;
         if (dst->impl)
             dst->grp = dst->dgrp = 0; /* a new value: no longer an alias */
-        if (src && src->impl && dst->impl && src != dst) {
+        if (src && src->xown && dst->xown && src != dst) {
+            own_move(src); /* 'g = h' of two [[owner]] globals: a move */
+        } else if (src && src->impl && dst->impl && src != dst) {
             own_alias(dst, src); /* 'q = p': aliases of one resource */
         } else if (src && src->impl)
             own_grp_set(src, OWN_UNTR); /* '[[owner]] q = p': 'q' owns it */
@@ -6074,11 +6122,13 @@ static struct own_var *own_impl_new(Sym *s)
 {
     struct own_var *o;
     int glob;
-    if (!s || nocode_wanted || !local_stack || s->a.owner || s->a.borrow
+    if (!s || nocode_wanted || !local_stack || s->a.borrow
         || (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR
         || own_n >= OWN_MAX - OWN_RESERVE)
         return NULL;
     glob = own_is_glob(s);
+    if (s->a.owner && !glob) /* local [[owner]]s are tracked as such */
+        return NULL;
     if (!glob && ((s->r & (VT_VALMASK | VT_LVAL)) != (VT_LOCAL | VT_LVAL)
         || (s->type.t & (VT_STATIC | VT_EXTERN)) || s->sym_scope > local_scope))
         return NULL;
@@ -6087,8 +6137,23 @@ static struct own_var *own_impl_new(Sym *s)
     o = own_new(s, OWN_OWNER, OWN_MOVED);
     o->impl = 1;
     o->glob = glob;
+    o->xown = s->a.owner;
     o->cacq = !glob && s->sym_scope != local_scope;
     s->a.own_impl = 1;
+    return o;
+}
+
+/* the [[owner]] global or static 's' is used in a function: tracked from
+   its first use, with an unknown state (see own_var.xown) */
+static struct own_var *own_xglob(Sym *s)
+{
+    struct own_var *o;
+    if (!s || !s->a.owner || !own_is_glob(s) || nocode_wanted || !local_stack)
+        return NULL;
+    if ((o = own_find(s)))
+        return o;
+    if ((o = own_impl_new(s)))
+        o->st = OWN_UNTR;
     return o;
 }
 
@@ -10257,6 +10322,8 @@ static void expr_eq(void)
                 && vtop->type.ref == vtop->sym->type.ref ? vtop->sym : NULL;
             struct own_var *amv = NULL, *noesc0 = own_noesc, *dmv = NULL;
             int dal = 0;
+            if (!dst && isym)
+                dst = own_xglob(isym); /* 'g = ...' of an [[owner]] global */
             mv = dst ? own_peek(0) : NULL;
             if (dst && !mv && dst->impl)
                 mv = own_peek_isub();
@@ -12977,6 +13044,9 @@ static int decl(int l)
                     if (tok == '=' || auto_str)
                         has_init = 1;
 
+                    if ((ad.a.owner || ad.a.borrow) && (type.t & VT_BTYPE) != VT_FUNC
+                        && (l == VT_CONST || (type.t & (VT_STATIC | VT_EXTERN))))
+                        own_gdecl_check(&type, &ad, v);
                     if (((type.t & VT_EXTERN) && (!has_init || l != VT_CONST))
 		        || (type.t & VT_BTYPE) == VT_FUNC
                         /* as with GCC, uninitialized global arrays with no size

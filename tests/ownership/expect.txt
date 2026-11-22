@@ -96,3 +96,11 @@ err_plain_derived_strchr.c use of pointer 'q' after the memory it points into wa
 err_plain_derived_index.c use of pointer 'q' after the memory it points into was released
 err_plain_derived_chain.c use of pointer 'r' after the memory it points into was released
 err_plain_derived_strcpy.c use of pointer 'p' after it was released
+err_owner_global_overwrite.c assignment overwrites owner 'g' which still owns a resource (leak)
+err_owner_global_copy_overwrite.c assignment overwrites owner 'g' which still owns a resource (leak)
+err_owner_global_uaf.c use of owner 'g' after move
+err_owner_global_double_free.c use of owner 'g' after move
+err_owner_global_move_out.c use of owner 'g' after move
+err_owner_global_move_in.c use of owner 'x' after move
+err_owner_static_local.c assignment overwrites owner 's' which still owns a resource (leak)
+err_owner_global_type.c [[owner]] requires a pointer type ('n')
