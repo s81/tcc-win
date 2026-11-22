@@ -91,3 +91,8 @@ err_plain_alias_leak.c pointer 'p' still owns a resource at end of scope (leak)
 err_plain_ptrfield_overwrite.c assignment overwrites pointer 'n->name' which still owns a resource (leak)
 err_plain_ptrfield_uaf.c use of pointer 'n->name' after it was released
 err_plain_ptrfield_nested.c use of pointer 'n->v[1]' after it was released
+err_plain_derived_uaf.c use of pointer 'q' after the memory it points into was released (released at line 3)
+err_plain_derived_strchr.c use of pointer 'q' after the memory it points into was released
+err_plain_derived_index.c use of pointer 'q' after the memory it points into was released
+err_plain_derived_chain.c use of pointer 'r' after the memory it points into was released
+err_plain_derived_strcpy.c use of pointer 'p' after it was released

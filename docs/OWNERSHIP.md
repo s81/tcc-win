@@ -263,7 +263,23 @@ p[0] = 0;       // error: use of pointer 'p' after it was released (released at 
 ```
 
 An alias made in only one branch of an `if` (or in a loop body) ends after
-it: `q` is then not checked any more.
+it: `q` is then not checked any more. The result of `strcpy`, `strncpy`,
+`strcat`, `strncat`, `memcpy`, `memmove` and `memset` (and their `wcs`/`wmem`
+forms) is their first argument, so `q = strcpy(p, s)` is an alias too.
+
+**Derived pointers.** A pointer into the memory of a plain pointer `p`,
+made by `q = p + n`, `q = p - n`, `q = &p[i]` or by the result of `strchr`,
+`strrchr`, `strstr`, `strpbrk`, `memchr`, `stpcpy` (and their `wcs`/`wmem`
+forms) with `p` as the first argument, owns nothing: it is never a leak and
+cannot release the memory, but it is invalid once `p` (or an alias of it)
+is released. Pointers derived from it are invalid then too.
+
+```c
+char *q = strchr(p, ':');
+free(p);
+puts(q);        // error: use of pointer 'q' after the memory it points into was
+                // released (released at line 2)
+```
 
 **Members and elements.** `s.p` and `v[1]` are tracked like variables. Using
 the struct or array as a whole (`&s`, `t = s`, `return s;`, `f(v)`), or an
@@ -678,9 +694,11 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   `p + 1`, `strchr(p, 'x')` or `(char *)s` are not tracked, and a borrow
   initialized from them is not connected to any owner.
 - Plain (unannotated) pointers are checked as described under *Plain
-  pointers that keep an owner result*. Only plain assignments make aliases:
-  `q = p + 1`, `q = strchr(p, 'x')`, `q = (char *)p` or storing `p` in an
-  untracked place hand the resource on instead.
+  pointers that keep an owner result*. Only the forms listed there make
+  aliases and derived pointers: casts (`q = (char *)p`), other functions,
+  `q = c ? p : r` or storing `p` in an untracked place hand the resource on
+  instead; `p + n` is recognized only as the whole right hand side, up to 24
+  tokens.
 - With a shared borrow alive, writes through the owner itself (`p[0] = 1`)
   are not detected; only C's `const` protects writes through the borrow.
 - Liveness follows the source text, not the full control-flow graph, so it

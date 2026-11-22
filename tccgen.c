@@ -1235,6 +1235,9 @@ static void depr_warn(Sym *sym)
 static int nd_call;
 /* same for a call whose result is an [[owner]]: discarding it is a leak */
 static int own_res_call;
+/* the value is the result of 'strchr(p, c)' (or 'strcpy(p, s)': alias) of
+   the plain pointer 'v', see own_derive_peek() */
+static struct own_drv { struct own_var *v; int alias; } own_drv, own_drv_stored;
 static int own_res_stored; /* own_res_call of the value of the last store */
 
 /* Merge symbol attributes.  */
@@ -4059,6 +4062,7 @@ ST_FUNC void vstore(void)
     int sbt, dbt, ft, r, size, align, bit_size, bit_pos, delayed_cast;
 
     own_res_stored = own_res_call; /* see own_impl_new() */
+    own_drv_stored = own_drv, own_drv.v = NULL;
     nd_call = own_res_call = 0;
     ft = vtop[-1].type.t;
     sbt = vtop->type.t & VT_BTYPE;
@@ -4380,6 +4384,9 @@ struct own_var {
     int grp;       /* plain pointers: aliases ('q = p') share a group id and
                       one resource: releasing one releases all */
     int grp_pos;   /* tok_count where it joined the group */
+    int did;       /* id of the pointers derived from it ('q = p + 1') */
+    int dgrp;      /* derived: 'did' of the pointer it points into */
+    int dpos;      /* tok_count where it was derived */
     unsigned char cacq; /* plain pointer tracked from a block nested in the
                            one that declares it: it is owned on some paths
                            only, so 'possibly still owns' is not reported */
@@ -4988,6 +4995,7 @@ static struct own_var *own_new(Sym *s, int kind, int st)
     o->rsym = NULL;
     o->impl = o->cacq = o->isub = o->glob = 0;
     o->grp = o->grp_pos = 0;
+    o->did = o->dgrp = o->dpos = 0;
     return o;
 }
 
@@ -5389,20 +5397,47 @@ static void own_use_struct(const struct own_path *p, int addrof)
 static int own_grp_ids;
 static void own_grp_set(struct own_var *o, int st)
 {
-    int i;
+    int i, j;
     o->st = st;
-    if (!o->grp)
+    if (o->grp)
+        for (i = 0; i < own_n; ++i) {
+            struct own_var *m = &own_vars[i];
+            if (m != o && m->grp == o->grp) {
+                if (st == OWN_NULL && m->st != OWN_OWNED)
+                    continue; /* a null test narrows owned ones only */
+                m->st = st;
+                if (st == OWN_MOVED)
+                    m->move_line = o->move_line, ++m->mgen;
+            }
+        }
+    if (st != OWN_MOVED)
         return;
+    /* released: the pointers derived from it ('q = p + 1') are invalid */
     for (i = 0; i < own_n; ++i) {
         struct own_var *m = &own_vars[i];
-        if (m != o && m->grp == o->grp) {
-            if (st == OWN_NULL && m->st != OWN_OWNED)
-                continue; /* a null test narrows owned ones only */
-            m->st = st;
-            if (st == OWN_MOVED)
-                m->move_line = o->move_line, ++m->mgen;
+        if (!m->did || !(m == o || (o->grp && m->grp == o->grp)))
+            continue;
+        for (j = 0; j < own_n; ++j) {
+            struct own_var *d = &own_vars[j];
+            if (d->dgrp == m->did && d->st != OWN_MOVED) {
+                d->move_line = o->move_line;
+                own_grp_set(d, OWN_MOVED);
+            }
         }
     }
+}
+
+static int own_did_ids;
+/* 'dst = src + n', 'dst = strchr(src, c)': 'dst' points into the memory of
+   'src', owns nothing, and is invalid once 'src' is released */
+static void own_derive(struct own_var *dst, struct own_var *src)
+{
+    if (!src->did)
+        src->did = ++own_did_ids;
+    dst->grp = 0;
+    dst->dgrp = src->did, dst->dpos = tok_count;
+    dst->st = src->st == OWN_MOVED ? OWN_MOVED : OWN_UNTR;
+    dst->move_line = src->move_line;
 }
 
 /* 'dst = src' of plain pointers: aliases of one resource */
@@ -5479,8 +5514,12 @@ static void own_use_o(struct own_var *o, int addrof)
                is not reported: bookkeeping code does that */
             if (addrof != 2 && tok != '[' && tok != TOK_ARROW && o != own_argv)
                 return;
-            own_err(o, "use of pointer '%s' after it was released%s", name,
-                own_at(at, "released", o->move_line));
+            if (o->dgrp)
+                own_err(o, "use of pointer '%s' after the memory it points into"
+                    " was released%s", name, own_at(at, "released", o->move_line));
+            else
+                own_err(o, "use of pointer '%s' after it was released%s", name,
+                    own_at(at, "released", o->move_line));
             o->st = OWN_UNTR; /* reported once */
             return;
         }
@@ -5933,7 +5972,7 @@ static void own_assign(struct own_var *dst, struct own_var *src)
     if (dst->kind == OWN_OWNER) {
         int st = src && src->impl ? src->st : OWN_OWNED;
         if (dst->impl)
-            dst->grp = 0; /* a new value: no longer an alias */
+            dst->grp = dst->dgrp = 0; /* a new value: no longer an alias */
         if (src && src->impl && dst->impl && src != dst) {
             own_alias(dst, src); /* 'q = p': aliases of one resource */
         } else if (src && src->impl)
@@ -6304,15 +6343,87 @@ static struct own_var *own_alias_peek(void)
         || (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR
         || own_n >= OWN_MAX - OWN_RESERVE - 8)
         return NULL;
-    if ((o = own_find(s)))
-        return o->impl ? o : NULL;
     t = tok;
     next();
     if (tok == ';' || tok == ',' || tok == ')') {
-        if ((o = own_impl_new(s)))
+        if ((o = own_find(s)))
+            o = o->impl ? o : NULL;
+        else if ((o = own_impl_new(s)))
             o->st = OWN_UNTR;
     }
     unget_tok(t);
+    return o;
+}
+
+/* C library functions whose result points into their first argument
+   (1), or is their first argument (2) */
+static int own_derive_fn(int t)
+{
+    static const char *const in[] = { "strchr", "strrchr", "strstr", "strpbrk",
+        "memchr", "strchrnul", "memrchr", "strcasestr", "wcschr", "wcsrchr",
+        "wcsstr", "wcspbrk", "wmemchr", "stpcpy", NULL };
+    static const char *const same[] = { "strcpy", "strncpy", "strcat", "strncat",
+        "memcpy", "memmove", "memset", "wcscpy", "wcsncpy", "wcscat", "wcsncat",
+        "wmemcpy", "wmemmove", "wmemset", NULL };
+    const char *const *n, *name = get_tok_str(t, NULL);
+    for (n = in; *n; ++n)
+        if (!strcmp(name, *n))
+            return 1;
+    for (n = same; *n; ++n)
+        if (!strcmp(name, *n))
+            return 2;
+    return 0;
+}
+
+/* the right hand side of 'q = ...' / 'char *q = ...' follows: is it
+   'p + n', 'p - n', '&p[i]' or 'strchr(p, ...)' of a plain pointer 'p'?
+   Returns 'p' (tracked from here on) and sets '*alias' for 'strcpy(p, s)' */
+static struct own_var *own_derive_peek(int *alias)
+{
+    int tk[OWN_SCAN_MAX], n, k = -1;
+    struct own_var *o;
+    Sym *s;
+    *alias = 0;
+    if (nocode_wanted || own_n >= OWN_MAX - OWN_RESERVE - 8
+        || (tok < TOK_UIDENT && tok != '&'))
+        return NULL;
+    n = own_scan(tk, ';', ',');
+    if (n >= 3 && tk[0] >= TOK_UIDENT && (tk[1] == '+' || tk[1] == '-'))
+        k = 0; /* p + n */
+    else if (n >= 4 && tk[0] == '&' && tk[1] >= TOK_UIDENT && tk[2] == '[')
+        k = 1; /* &p[i] */
+    if (k < 0 || !(s = sym_find(tk[k])) || (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR)
+        return NULL;
+    if ((o = own_find(s)))
+        return o->impl ? o : NULL;
+    if ((o = own_impl_new(s)))
+        o->st = OWN_UNTR;
+    return o;
+}
+
+/* the first argument of 'strchr' ... follows: if it is a plain pointer
+   ('p' or '(p)'), return it (tracked from here on) */
+static struct own_var *own_first_arg(void)
+{
+    int tk[OWN_SCAN_MAX], n, k;
+    struct own_var *o;
+    Sym *s;
+    if (nocode_wanted || own_n >= OWN_MAX - OWN_RESERVE - 8
+        || (tok < TOK_UIDENT && tok != '('))
+        return NULL;
+    n = own_scan(tk, ',', ')');
+    if (n == 1 && tk[0] >= TOK_UIDENT)
+        k = 0;
+    else if (n == 3 && tk[0] == '(' && tk[1] >= TOK_UIDENT && tk[2] == ')')
+        k = 1;
+    else
+        return NULL;
+    if (!(s = sym_find(tk[k])) || (s->type.t & (VT_BTYPE | VT_ARRAY)) != VT_PTR)
+        return NULL;
+    if ((o = own_find(s)))
+        return o->impl ? o : NULL;
+    if ((o = own_impl_new(s)))
+        o->st = OWN_UNTR;
     return o;
 }
 
@@ -6376,7 +6487,7 @@ static int own_noretain(Sym *callee)
     for (n = fn; *n; ++n)
         if (!strcmp(name, *n))
             return 1;
-    return 0;
+    return own_derive_fn(callee->v) != 0; /* 'strchr' ... */
 }
 
 /* an argument was parsed: if its value is the result of an [[owner]] call
@@ -6561,9 +6672,12 @@ static int own_snapx(struct own_snap *sn, struct own_var *o)
 static void own_restore(struct own_snap *sn)
 {
     int i, k;
-    for (i = 0; i < own_n; ++i)
+    for (i = 0; i < own_n; ++i) {
         if (own_vars[i].grp && own_vars[i].grp_pos > sn->pos)
             own_vars[i].grp = 0; /* made after the snapshot */
+        if (own_vars[i].dgrp && own_vars[i].dpos > sn->pos)
+            own_vars[i].dgrp = 0;
+    }
     for (i = 0; i < sn->n && i < own_n; ++i)
         if (!own_vars[i].gone)
             own_vars[i].st = sn->st[i], own_vars[i].of = sn->of[i];
@@ -9510,7 +9624,8 @@ special_math_val:
             Sym *callee;
             TokenString *p, *p2;
             struct own_call ocall;
-            int noret;
+            int noret, own_drv_al;
+            struct own_var *own_drv_src;
 
             /* function call  */
             if ((vtop->type.t & VT_BTYPE) != VT_FUNC) {
@@ -9532,6 +9647,8 @@ special_math_val:
                 ? vtop->sym : NULL;
             noret = own_n && own_noretain(callee);
             own_call_globals(callee);
+            own_drv_src = NULL;
+            own_drv_al = callee && !nocode_wanted ? own_derive_fn(callee->v) - 1 : -1;
             next();
             sa = s->next; /* first parameter */
             nb_args = regsize = 0;
@@ -9606,6 +9723,8 @@ special_math_val:
                             own_noesc = mv; /* not kept by the callee */
                         if (mv && sa && sa->a.owner)
                             own_kids_check(mv, own_void_param(sa));
+                        if (nb_args == 0 && own_drv_al >= 0)
+                            own_drv_src = own_first_arg();
                         own_res_call = 0;
                         own_argv = mv && mv->impl ? mv : NULL;
                         expr_eq();
@@ -9652,6 +9771,8 @@ special_math_val:
                             own_noesc = mv; /* not kept by the callee */
                         if (mv && sa && sa->a.owner)
                             own_kids_check(mv, own_void_param(sa));
+                        if (nb_args == 0 && own_drv_al >= 0)
+                            own_drv_src = own_first_arg();
                         own_res_call = 0;
                         own_argv = mv && mv->impl ? mv : NULL;
                         expr_eq();
@@ -9740,6 +9861,7 @@ special_math_val:
                 nd_call = 0;
                 own_res_call = callee && callee->a.owner && !nocode_wanted
                     ? callee->v : 0;
+                own_drv.v = own_drv_src, own_drv.alias = own_drv_al;
                 if (s->f.func_nodiscard
                     || (s->type.ref && (bt == VT_STRUCT || IS_ENUM(s->type.t))
                         && s->type.ref->a.nodiscard))
@@ -10133,7 +10255,8 @@ static void expr_eq(void)
                         == (VT_CONST | VT_LVAL | VT_SYM) && vtop->c.i == 0))
                 && vtop->type.t == vtop->sym->type.t
                 && vtop->type.ref == vtop->sym->type.ref ? vtop->sym : NULL;
-            struct own_var *amv = NULL, *noesc0 = own_noesc;
+            struct own_var *amv = NULL, *noesc0 = own_noesc, *dmv = NULL;
+            int dal = 0;
             mv = dst ? own_peek(0) : NULL;
             if (dst && !mv && dst->impl)
                 mv = own_peek_isub();
@@ -10149,22 +10272,39 @@ static void expr_eq(void)
             if (!dst && !amv && (ilv || (isym
                 && (isym->type.t & (VT_BTYPE | VT_ARRAY)) == VT_PTR)))
                 amv = own_alias_peek();
+            /* 'q = p + n', 'q = strchr(p, c)': a derived pointer */
+            if (!amv && !mv && (dst ? dst->impl : ilv || (isym
+                && (isym->type.t & (VT_BTYPE | VT_ARRAY)) == VT_PTR)))
+                dmv = own_derive_peek(&dal);
             has_ssrc = sdst.sym && own_peek_sv(&ssrc);
             own_slast.sym = NULL;
             own_lending = dst && dst->kind != OWN_OWNER ? mv : NULL;
-            if ((mv && mv->impl && dst->impl) || amv)
-                own_noesc = mv ? mv : amv; /* not an escape: an alias */
+            if ((mv && mv->impl && dst->impl) || amv || dmv)
+                own_noesc = mv ? mv : amv ? amv : dmv; /* not an escape: an alias */
             expr_eq();
             own_lending = NULL, own_noesc = noesc0;
-            if (isym && (own_res_call || amv))
+            if (own_res_call)
+                dmv = NULL;
+            else if (!dmv && !amv && !mv && own_drv.v && own_drv.v->impl
+                     && (dst ? dst->impl : ilv || (isym
+                         && (isym->type.t & (VT_BTYPE | VT_ARRAY)) == VT_PTR)))
+                dmv = own_drv.v, dal = own_drv.alias; /* 'q = strchr(p, c)' */
+            if (isym && (own_res_call || amv || dmv))
                 dst = own_impl_new(isym);
-            if (!dst && ilv && (own_res_call || amv)) /* 's.p = malloc(n)' */
+            if (!dst && ilv && (own_res_call || amv || dmv)) /* 's.p = malloc(n)' */
                 dst = own_isub_new(ilv, ilv_off, ilv_name, ilv_ptr);
             if (!dst && amv) /* not tracked: 'p' is handed on */
                 own_grp_set(amv, OWN_UNTR);
             if (dst)
                 own_check_overwrite(dst);
-            own_assign(dst, mv ? mv : amv);
+            if (dst && dmv && dst != dmv) {
+                dst->grp = dst->dgrp = 0;
+                if (dal)
+                    own_alias(dst, dmv); /* 'q = strcpy(p, s)' */
+                else
+                    own_derive(dst, dmv);
+            } else
+                own_assign(dst, mv ? mv : amv);
             own_rlink(dst);
             own_sassign(&sdst, has_ssrc ? &ssrc : NULL);
         } else {
@@ -10182,6 +10322,7 @@ ST_FUNC void gexpr(void)
     if (tok == ',') {
         do {
             own_res_lost(); /* '(malloc(n), x)' */
+            own_drv.v = NULL;
             vpop();
             next();
             expr_eq();
@@ -10621,7 +10762,7 @@ static void block(int flags)
 
 again:
     ++own_stmt;
-    own_rcall.v = NULL, own_res_call = 0;
+    own_rcall.v = NULL, own_res_call = 0, own_drv.v = NULL;
     while (tok == '[' && parse_c23_attribute(NULL))
         ; /* C23 attribute declaration/statement */
     t = tok;
@@ -12930,17 +13071,25 @@ static int decl(int l)
                                    && !nocode_wanted) {
                             /* 'char *p = malloc(n);': see own_impl_new() */
                             struct own_var *io, *amv = NULL, *noesc0 = own_noesc;
+                            struct own_var *dmv = NULL;
+                            int dal = 0;
                             if (own_n && !(amv = own_peek(0)))
                                 amv = own_peek_isub();
                             if (amv && !amv->impl)
                                 amv = NULL;
                             if (!amv)
                                 amv = own_alias_peek();
+                            if (!amv)
+                                dmv = own_derive_peek(&dal);
                             own_res_stored = 0;
-                            if (amv)
-                                own_noesc = amv; /* 'char *q = p;': an alias */
+                            if (amv || dmv)
+                                own_noesc = amv ? amv : dmv; /* 'char *q = p;': an alias */
+                            own_drv_stored.v = NULL;
                             decl_initializer_alloc(&type, &ad, r, has_init, v, l);
                             own_noesc = noesc0;
+                            if (!amv && !dmv && own_drv_stored.v && own_drv_stored.v->impl)
+                                dmv = own_drv_stored.v, dal = own_drv_stored.alias;
+                            own_drv_stored.v = NULL;
                             if (own_res_stored && (io = own_impl_new(sym_find(v)))) {
                                 io->st = OWN_OWNED;
                                 io->own_line = own_line_now();
@@ -12950,6 +13099,12 @@ static int decl(int l)
                                     own_alias(io, amv);
                                 else
                                     own_grp_set(amv, OWN_UNTR);
+                            } else if (dmv && (io = own_impl_new(sym_find(v)))
+                                       && io != dmv) {
+                                if (dal)
+                                    own_alias(io, dmv);
+                                else
+                                    own_derive(io, dmv);
                             }
                             own_res_stored = 0;
                         } else
