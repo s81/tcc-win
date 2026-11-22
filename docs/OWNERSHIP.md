@@ -183,8 +183,12 @@ and borrows* return an owner.
 
 ### Plain pointers that keep an owner result
 
-A plain (not `[[owner]]`) local pointer that is initialized or assigned
-from an owner result becomes an *implicit owner*. It must be released or
+A plain (not `[[owner]]`) pointer that is initialized or assigned from an
+owner result becomes an *implicit owner*: a local variable or parameter
+(also when the assignment is in a nested block or branch), a pointer
+member of a local struct variable (`s.p`, `s.a.p`), an element of a local
+array with a constant index (`v[1]`), or a global or static variable (see
+below). It must be released or
 handed away before it goes out of scope, like an `[[owner]]`, but much more
 counts as handing it away, so that ordinary C code stays valid:
 
@@ -207,13 +211,103 @@ void f(const char *s)
     if (!p)
         return;                 // ok: null
     printf("%s\n", p);
-}                               // error: owner 'p' still owns a resource at end
+}                               // error: pointer 'p' still owns a resource at end
                                 // of scope (leak): release or move it (acquired at line 3)
 ```
 
 Overwriting it while it still owns the resource (`p = malloc(4); p =
-malloc(8);`) is an error too. Use after free is checked only for `[[owner]]`
-variables, not for implicit owners.
+malloc(8);`) is an error too.
+
+**Branches.** A pointer that gets an owner result in only some branches
+must be released after them, unless it is released or handed away in the
+same branch:
+
+```c
+char *p = NULL;
+if (c)
+    p = malloc(n);
+free(p);                        // ok (free(NULL) does nothing); without it:
+                                // error: pointer 'p' still owns a resource (leak)
+```
+
+If it is released on some paths only afterwards (`if (p != buf)
+free(p);`), no error is reported for such a pointer, since that condition
+usually matches the one that allocated it.
+
+**Use after release.** Once a plain pointer is passed to `free` (or to any
+`[[owner]]` parameter, such as `realloc`'s), using it is an error until it
+gets a new value; this also catches a double free. This applies to every
+local plain pointer, parameter, tracked member and global, also when it was
+not allocated in the function. Only uses that access the memory are
+reported: `*p`, `p[i]`, `p->f`, and passing `p` to a function. Reading the
+old value (`if (p)`, `p == q`, `(uintptr_t)p`, `q = p`) is accepted, since
+bookkeeping code does that. After a release on some paths only (`if (c)
+free(p);`) no use is reported.
+
+```c
+free(p);
+p[0] = 0;       // error: use of pointer 'p' after it was released (released at line 1)
+free(p);        // error (the same, a double free)
+p = NULL;       // ok: a new value
+```
+
+**Aliases.** After `q = p` (or `char *q = p;`) of plain pointers, `p` and
+`q` share one resource: releasing either releases both, handing either on
+hands on both, and the resource is a leak only if neither keeps it. This
+holds for locals, parameters, tracked members and globals:
+
+```c
+char *q = p;
+free(q);
+p[0] = 0;       // error: use of pointer 'p' after it was released (released at line 2)
+```
+
+An alias made in only one branch of an `if` (or in a loop body) ends after
+it: `q` is then not checked any more. The result of `strcpy`, `strncpy`,
+`strcat`, `strncat`, `memcpy`, `memmove` and `memset` (and their `wcs`/`wmem`
+forms) is their first argument, so `q = strcpy(p, s)` is an alias too.
+
+**Derived pointers.** A pointer into the memory of a plain pointer `p`,
+made by `q = p + n`, `q = p - n`, `q = &p[i]` or by the result of `strchr`,
+`strrchr`, `strstr`, `strpbrk`, `memchr`, `stpcpy` (and their `wcs`/`wmem`
+forms) with `p` as the first argument, owns nothing: it is never a leak and
+cannot release the memory, but it is invalid once `p` (or an alias of it)
+is released. Pointers derived from it are invalid then too.
+
+```c
+char *q = strchr(p, ':');
+free(p);
+puts(q);        // error: use of pointer 'q' after the memory it points into was
+                // released (released at line 2)
+```
+
+**Members and elements.** `s.p` and `v[1]` are tracked like variables. Using
+the struct or array as a whole (`&s`, `t = s`, `return s;`, `f(v)`), or an
+element with an index that is not a constant (`free(v[i])` in a loop),
+hands all its tracked members on: they are not checked any more.
+
+**Members through pointers.** A member of the object a local pointer or
+parameter points to (`n->name`, `n->in.q`, `n->v[1]`) is tracked like a
+global: the object outlives the function, so it is never a leak, but
+overwriting it while it owns a resource it got in the function and using
+it after `free` are errors. Using the pointer itself (`n = n->next`,
+`free(n)`, `f(n)`) and calls as described below end the checking of its
+members. Only one `->` is followed (`n->next->name` is not).
+
+```c
+free(n->name);
+n->name[0] = 0;          // error: use of pointer 'n->name' after it was released
+n->name = strdup(s);     // ok
+n->name = strdup(t);     // error: assignment overwrites pointer 'n->name' which
+                         // still owns a resource (leak)
+```
+
+**Globals and statics.** A global or static pointer keeps its resource
+after the function returns, so it is never a leak. Within a function,
+overwriting it while it owns a resource it got there, and using it after
+`free`, are errors. A call to a function other than the C library
+functions above may change the global, so it is not checked after such a
+call.
 
 ## Borrows
 
@@ -599,9 +693,12 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
 - Only plain variable names create moves and borrows. Expressions such as
   `p + 1`, `strchr(p, 'x')` or `(char *)s` are not tracked, and a borrow
   initialized from them is not connected to any owner.
-- Plain (unannotated) pointers are only checked for leaks (see *Plain
-  pointers that keep an owner result*), never for use after free, so
-  `char *alias = p;` can still dangle.
+- Plain (unannotated) pointers are checked as described under *Plain
+  pointers that keep an owner result*. Only the forms listed there make
+  aliases and derived pointers: casts (`q = (char *)p`), other functions,
+  `q = c ? p : r` or storing `p` in an untracked place hand the resource on
+  instead; `p + n` is recognized only as the whole right hand side, up to 24
+  tokens.
 - With a shared borrow alive, writes through the owner itself (`p[0] = 1`)
   are not detected; only C's `const` protects writes through the borrow.
 - Liveness follows the source text, not the full control-flow graph, so it
@@ -623,12 +720,16 @@ simple. It is a lint for common mistakes, **not a soundness guarantee**:
   structs*).
 - Only the null tests listed under *Null* narrow to *null*; for example
   `if (p == NULL || n == 0)` and `switch` do not.
-- Implicit owners (see *Plain pointers that keep an owner result*) are
-  only local, non-static pointer variables that receive the owner result
-  in the block where they are declared (`char *p; if (c) { p = malloc(n); }`
-  is not followed); struct fields, arrays and globals that receive an
-  owner result are not followed either. Aliases made by functions that return
-  their argument (`q = strcpy(p, s)`) count as a hand-off.
+- Implicit owners (see *Plain pointers that keep an owner result*): members
+  reached through more than one pointer (`n->next->name`), through global
+  pointers, members of global structs and elements of global arrays
+  receive the resource as a hand-off; members of local structs and elements of local arrays are
+  tracked with constant indexes below 16 (`s.v[1]`, `v[1].p`). An
+  assignment in a condition is followed only for a plain variable name (`if
+  ((p = malloc(n)) == NULL)`). Aliases made by functions that return
+  their argument (`q = strcpy(p, s)`) count as a hand-off. Implicit owners
+  count towards the limit of 64 tracked variables, but are only created
+  while fewer than 48 are tracked.
 - Infinite loops (`for (;;)`) are treated like loops that may run zero times.
 - At most 64 owners and borrows per function (each tracked struct field
   and array element counts as one).
